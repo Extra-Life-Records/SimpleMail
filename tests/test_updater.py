@@ -5,21 +5,27 @@ Run from the repo root:   PYTHONPATH= py -3 tests/test_updater.py
 Pre-release gate:         PYTHONPATH= py -3 tests/test_updater.py --live
 
 Covers the paths that bit real releases:
-  T1  ps1 updater generation never raises  (regression: v1.1.2 KeyError
-      from str.format() eating PowerShell's literal braces)
-  T2  apply_update full flow in an isolated scratch dir (frozen-exe simulated,
-      download mocked) - writes the ps1 next to the app, never touches APPDATA
-  T3  PowerShell parser accepts the generated ps1
+  T1  apply_update full flow never raises (frozen-exe simulated, download
+      mocked). History: v1.1.0 shipped a str.format() KeyError that stranded
+      every install forever - the update code that RUNS is always the OLD
+      exe's, so the old side must stay minimal and the swap now happens in
+      the NEW exe (--finish-update), whose code is fixable by shipping.
+  T2  old-side handover details: staged .new exe written next to the app,
+      helper launched as `new.exe --finish-update <target> <pid>` with
+      CREATE_NEW_PROCESS_GROUP (NOT DETACHED_PROCESS - v1.1.4 regression:
+      detached children silently never ran); bad/truncated downloads are
+      rejected BEFORE the app exits; a helper that dies on boot aborts the
+      update with the app still running.
+  TF  finish_update (new-exe side): waits on the exe FILE lock, not on a
+      hard-coded process name (regression: installs named SimpleMail-x64.exe
+      never matched `Get-Process -Name SimpleMail`), swaps, relaunches; if
+      the swap never succeeds it still relaunches the old exe.
   T4  check_for_update arch/asset selection with mocked GitHub payloads
   T5  check_update error surfacing (arch-named error, exceptions surfaced)
   T6  live GitHub check: latest release must exist and carry an asset for
       THIS machine's arch (regression: v1.1.0 shipped x64-only)
   T7  web/app.js startup update-check ordering + checkForUpdates behaviour
       (node vm harness; skipped if node is unavailable)
-
---live also runs the generated ps1 for real in a scratch dir (replace +
-relaunch + self-delete). It is skipped automatically if a SimpleMail process
-is already running (the updater waits for it to exit).
 
 SAFETY RULES (learned the hard way):
   * Never launch a real app instance from a test - a launched instance reads
@@ -68,95 +74,185 @@ m = load_app()
 SCRATCH = Path(tempfile.mkdtemp(prefix="sm-test-"))
 
 # ---------------------------------------------------------------------------
-# T1 + T2: apply_update full flow (frozen simulation, isolated scratch)
+# T1 + T2: apply_update old-side handover (frozen simulation, isolated scratch)
 # ---------------------------------------------------------------------------
 
-target = SCRATCH / "SimpleMail.exe"
+target = SCRATCH / "SimpleMail-x64.exe"   # renamed installs must work too
 target.write_bytes(b"OLD-EXE")
-new_exe = SCRATCH / "SimpleMail.new.exe"
-updater = SCRATCH / "_update.ps1"
+new_exe = SCRATCH / "SimpleMail-x64.new.exe"
 popen_calls = []
+GOOD_EXE = b"MZ" + b"\x00" * 1_100_000
 
 m._frozen_exe_path = lambda: target
-m.download_file = lambda url, dest: Path(dest).write_bytes(b"NEW-EXE-CONTENT")
+m.download_file = lambda url, dest: Path(dest).write_bytes(GOOD_EXE)
 m.os._exit = lambda code: (_ for _ in ()).throw(SystemExit(code))
 orig_popen = subprocess.Popen
+orig_sleep = time.sleep
+
+
+class FakeProc:
+    def __init__(self, exit_code=None):
+        self._exit = exit_code
+        self.returncode = exit_code
+
+    def poll(self):
+        return self._exit
+
+
+helper_exit = [None]  # None = helper alive after boot
 
 
 def fake_popen(args, **kw):
     popen_calls.append((list(args), kw))
-    return None
+    return FakeProc(helper_exit[0])
 
 
 subprocess.Popen = fake_popen
+time.sleep = lambda s: None
 try:
-    m.apply_update("https://example.invalid/SimpleMail-arm64.exe")
-    check("T1: apply_update completed without raising (KeyError regression)", True)
+    m.apply_update("https://example.invalid/SimpleMail-x64.exe")
+    check("T1: apply_update completed without raising", False, "os._exit never reached")
 except SystemExit as e:
-    check("T1: apply_update completed without raising (KeyError regression)", e.code == 0, str(e))
+    check("T1: apply_update completed without raising", e.code == 0, str(e))
 except Exception as e:
-    check("T1: apply_update completed without raising (KeyError regression)",
-          False, f"{type(e).__name__}: {e}")
+    check("T1: apply_update completed without raising", False, f"{type(e).__name__}: {e}")
 finally:
     subprocess.Popen = orig_popen
+    time.sleep = orig_sleep
 
-check("T2: new exe downloaded next to app", new_exe.exists() and new_exe.read_bytes() == b"NEW-EXE-CONTENT")
-check("T2: ps1 written next to app", updater.exists())
-if updater.exists():
-    ps = updater.read_text(encoding="utf-8")
-    check("T2: ps1 has real paths (no placeholders)",
-          str(target) in ps and str(new_exe) in ps
-          and "__TARGET__" not in ps and "__NEW_EXE__" not in ps)
-    check("T2: ps1 keeps wait-loop + Start-Sleep + self-delete",
-          "Get-Process -Name SimpleMail" in ps
-          and "Start-Sleep -Seconds 2" in ps
-          and "PSCommandPath" in ps)
-check("T2: updater launched hidden via powershell",
-      len(popen_calls) == 1 and "powershell" in popen_calls[0][0][0].lower()
-      and "-File" in popen_calls[0][0]
-      and popen_calls[0][1].get("creationflags", 0) & 0x00000200  # CREATE_NEW_PROCESS_GROUP
-      and "Hidden" in popen_calls[0][0],
+check("T2: new exe staged next to app", new_exe.exists() and new_exe.read_bytes() == GOOD_EXE)
+check("T2: handover launches NEW exe with --finish-update <target> <pid>",
+      len(popen_calls) == 1
+      and popen_calls[0][0] == [str(new_exe), "--finish-update", str(target), str(os.getpid())],
       str(popen_calls))
-check("T2: NOT DETACHED_PROCESS (that breaks powershell -File, v1.1.4 regression)",
+check("T2: CREATE_NEW_PROCESS_GROUP set",
+      bool(popen_calls[0][1].get("creationflags", 0) & 0x00000200), str(popen_calls))
+check("T2: NOT DETACHED_PROCESS (v1.1.4 regression: detached child never ran)",
       not (popen_calls[0][1].get("creationflags", 0) & 0x00000008), str(popen_calls))
 
+# T2-bad: corrupt/truncated download must abort BEFORE the app exits
+popen_calls.clear()
+new_exe.unlink()
+m.download_file = lambda url, dest: Path(dest).write_bytes(b"<html>error page</html>")
+subprocess.Popen = fake_popen
+try:
+    m.apply_update("https://example.invalid/SimpleMail-x64.exe")
+    check("T2-bad: corrupt download rejected", False, "did not raise")
+except SystemExit:
+    check("T2-bad: corrupt download rejected", False, "app exited on corrupt download")
+except Exception:
+    check("T2-bad: corrupt download rejected", True)
+finally:
+    subprocess.Popen = orig_popen
+check("T2-bad: staged file cleaned up, helper never launched",
+      not new_exe.exists() and not popen_calls, str(popen_calls))
+
+# T2-dead: helper that dies on boot aborts the update with the app alive
+popen_calls.clear()
+m.download_file = lambda url, dest: Path(dest).write_bytes(GOOD_EXE)
+helper_exit[0] = 1
+subprocess.Popen = fake_popen
+time.sleep = lambda s: None
+try:
+    m.apply_update("https://example.invalid/SimpleMail-x64.exe")
+    check("T2-dead: dead helper -> update aborted, app stays alive", False, "did not raise")
+except SystemExit:
+    check("T2-dead: dead helper -> update aborted, app stays alive", False, "app exited blind")
+except RuntimeError as e:
+    check("T2-dead: dead helper -> update aborted, app stays alive", "exited early" in str(e), str(e))
+finally:
+    subprocess.Popen = orig_popen
+    time.sleep = orig_sleep
+    helper_exit[0] = None
+check("T2-dead: staged file cleaned up", not new_exe.exists())
+
 # ---------------------------------------------------------------------------
-# T2b: the launch form actually EXECUTES the script (v1.1.2-v1.1.3 bug:
-# DETACHED_PROCESS made powershell silently never run the ps1)
+# T2b: the launch form actually EXECUTES a child that survives (regression:
+# v1.1.2-v1.1.3 DETACHED_PROCESS made the child silently never run)
 # ---------------------------------------------------------------------------
 
-if shutil.which("powershell"):
-    launch_log = SCRATCH / "launch-log.txt"
-    launch_ps1 = SCRATCH / "t-launch.ps1"
-    launch_ps1.write_text(
-        f"Set-Content -Path '{launch_log}' -Value 'ran'\n"
-        "Remove-Item -Force $PSCommandPath -ErrorAction SilentlyContinue\n",
-        encoding="utf-8")
-    m._launch_updater(launch_ps1)
-    deadline = time.time() + 15
-    while time.time() < deadline and not launch_log.exists():
-        time.sleep(1)
-    check("T2b: launched updater script actually executes",
-          launch_log.exists() and launch_log.read_text().strip() == "ran",
-          "<no log>" if not launch_log.exists() else launch_log.read_text())
-    check("T2b: launched ps1 self-deletes", not launch_ps1.exists())
-else:
-    print("SKIP  T2b: no powershell on PATH")
+launch_log = SCRATCH / "launch-log.txt"
+child = subprocess.Popen(
+    [sys.executable, "-c",
+     f"open(r'{launch_log}', 'w').write('ran')"],
+    close_fds=True,
+    creationflags=getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0),
+    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+deadline = time.time() + 15
+while time.time() < deadline and not launch_log.exists():
+    time.sleep(0.5)
+check("T2b: child launched with handover flags actually executes",
+      launch_log.exists() and launch_log.read_text().strip() == "ran",
+      "<no log>" if not launch_log.exists() else launch_log.read_text())
 
 # ---------------------------------------------------------------------------
-# T3: PowerShell parses the generated ps1 (syntax gate)
+# TF: finish_update (new-exe side) - waits on the FILE lock, swaps, relaunches
 # ---------------------------------------------------------------------------
 
-if updater.exists() and shutil.which("powershell"):
-    p = subprocess.run(
-        ["powershell", "-NoProfile", "-Command",
-         f"$e=$null; [System.Management.Automation.PSParser]::Tokenize("
-         f"(Get-Content -Raw '{updater}'), [ref]$e) | Out-Null; "
-         f"if($e.Count){{exit 1}} else {{exit 0}}"],
-        capture_output=True, text=True, timeout=60)
-    check("T3: PowerShell parses the updater script", p.returncode == 0, p.stderr.strip()[:200])
-else:
-    check("T3: PowerShell parses the updater script", False, "no powershell on PATH")
+f_target = SCRATCH / "app" / "SimpleMail-x64.exe"
+f_target.parent.mkdir()
+f_target.write_bytes(b"OLD-EXE")
+f_self = SCRATCH / "app" / "SimpleMail-x64.new.exe"
+f_self.write_bytes(GOOD_EXE)
+
+real_copyfile = shutil.copyfile
+deny = [2]  # PermissionError for the first N attempts (old app still running)
+
+
+def locked_copyfile(src, dst):
+    if deny[0] > 0:
+        deny[0] -= 1
+        raise PermissionError("file in use")
+    return real_copyfile(src, dst)
+
+
+popen_calls.clear()
+shutil.copyfile = locked_copyfile
+subprocess.Popen = fake_popen
+try:
+    m.finish_update(str(f_target), old_pid="12345", self_path=str(f_self),
+                    sleep=lambda s: None)
+    check("TF: finish_update exits", False, "os._exit never reached")
+except SystemExit as e:
+    check("TF: swap waits out the file lock then exits 0", e.code == 0, str(e))
+finally:
+    shutil.copyfile = real_copyfile
+    subprocess.Popen = orig_popen
+check("TF: target replaced with the new binary", f_target.read_bytes() == GOOD_EXE)
+check("TF: app relaunched from the target path",
+      len(popen_calls) == 1 and popen_calls[0][0] == [str(f_target)], str(popen_calls))
+
+# TF-stuck: swap never succeeds -> still relaunch the OLD exe (never no app)
+f_target.write_bytes(b"OLD-EXE")
+deny[0] = 10 ** 9
+popen_calls.clear()
+shutil.copyfile = locked_copyfile
+subprocess.Popen = fake_popen
+try:
+    m.finish_update(str(f_target), self_path=str(f_self), sleep=lambda s: None,
+                    timeout=0)
+    check("TF-stuck: finish_update exits", False, "os._exit never reached")
+except SystemExit as e:
+    check("TF-stuck: failed swap exits 1", e.code == 1, str(e))
+finally:
+    shutil.copyfile = real_copyfile
+    subprocess.Popen = orig_popen
+check("TF-stuck: old exe untouched and still relaunched",
+      f_target.read_bytes() == b"OLD-EXE"
+      and len(popen_calls) == 1 and popen_calls[0][0] == [str(f_target)], str(popen_calls))
+
+# TF-dispatch: `exe --finish-update <target> <pid>` reaches finish_update
+# before any config/GUI work (the helper must never open a window)
+orig_argv, orig_finish = sys.argv, m.finish_update
+dispatch = []
+m.finish_update = lambda t, pid=None, **kw: dispatch.append((t, pid))
+sys.argv = ["SimpleMail-x64.new.exe", "--finish-update", str(f_target), "999"]
+try:
+    m.main()
+finally:
+    sys.argv, m.finish_update = orig_argv, orig_finish
+check("TF-dispatch: --finish-update routes to finish_update",
+      dispatch == [(str(f_target), "999")], str(dispatch))
 
 # ---------------------------------------------------------------------------
 # T4: check_for_update arch/asset selection (mocked GitHub payloads)
@@ -267,38 +363,44 @@ except Exception as e:
         print(f"SKIP  T6: live GitHub check (offline? {e}) - rerun with --live")
 
 # ---------------------------------------------------------------------------
-# T3-live (--live only): execute the generated ps1 in the scratch dir
+# TF-live (--live only): REAL locked-file swap - a child process holds the
+# target exe open the way a running app locks its own binary, and
+# finish_update must wait it out and then swap.
 # ---------------------------------------------------------------------------
 
-if LIVE and updater.exists() and shutil.which("powershell"):
-    busy = subprocess.run(
+if LIVE:
+    staged = SCRATCH / "staged"
+    staged.mkdir()
+    tgt = staged / "SimpleMail.exe"
+    new = staged / "SimpleMail.new.exe"
+    tgt.write_bytes(b"OLD")
+    new.write_bytes(b"NEW-PAYLOAD")
+    # Hold an exclusive handle on the target for ~4s (os.O_TEMPORARY-free
+    # exclusive open via msvcrt locking is overkill: on Windows a second
+    # writer is enough to collide with copyfile's open('wb') only when the
+    # holder denies sharing, so emulate the app lock with a child that maps
+    # the file via exclusive CreateFile through PowerShell).
+    holder = subprocess.Popen(
         ["powershell", "-NoProfile", "-Command",
-         "if (Get-Process -Name SimpleMail -ErrorAction SilentlyContinue) { exit 1 } else { exit 0 }"],
-        capture_output=True, timeout=30).returncode == 1
-    if busy:
-        print("SKIP  T3-live: a SimpleMail process is running (updater would wait for it)")
-    else:
-        staged = SCRATCH / "staged"           # fresh dir: ps1 targets the real scratch paths
-        staged.mkdir()
-        tgt = staged / "SimpleMail.exe"
-        new = staged / "SimpleMail.new.exe"
-        tgt.write_bytes(b"OLD")
-        new.write_bytes(b"NEW-PAYLOAD")
-        ps1 = staged / "_update.ps1"
-        ps1.write_text(
-            ("$target = '__TARGET__'\n$new = '__NEW_EXE__'\n"
-             "while (Get-Process -Name SimpleMail -ErrorAction SilentlyContinue) { Start-Sleep -Seconds 2 }\n"
-             "Copy-Item -Force $new $target\nRemove-Item -Force $new\n"
-             "Start-Process -FilePath $target\n"
-             "Remove-Item -Force $PSCommandPath -ErrorAction SilentlyContinue\n"
-             ).replace("__TARGET__", str(tgt)).replace("__NEW_EXE__", str(new)), encoding="utf-8")
-        p = subprocess.run(["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass",
-                            "-File", str(ps1)], capture_output=True, text=True, timeout=120)
-        time.sleep(3)
-        check("T3-live: ps1 exits clean", p.returncode == 0, p.stderr.strip()[:200])
-        check("T3-live: target replaced", tgt.exists() and tgt.read_bytes() == b"NEW-PAYLOAD")
-        check("T3-live: .new removed", not new.exists())
-        check("T3-live: ps1 self-deleted", not ps1.exists())
+         f"$f=[System.IO.File]::Open('{tgt}','Open','Read','None');"
+         "Start-Sleep -Seconds 4; $f.Close()"],
+        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    time.sleep(1.5)  # let the child take the handle first
+    popen_calls.clear()
+    subprocess.Popen = fake_popen
+    t0 = time.time()
+    try:
+        m.finish_update(str(tgt), self_path=str(new), timeout=30)
+    except SystemExit as e:
+        check("TF-live: swap exits 0 after real lock released", e.code == 0, str(e))
+    finally:
+        subprocess.Popen = orig_popen
+        holder.wait(timeout=30)
+    check("TF-live: waited for the lock (not instant)", time.time() - t0 >= 2,
+          f"{time.time() - t0:.1f}s")
+    check("TF-live: target replaced once unlocked", tgt.read_bytes() == b"NEW-PAYLOAD")
+    check("TF-live: relaunched from target", popen_calls and popen_calls[-1][0] == [str(tgt)],
+          str(popen_calls))
 
 # ---------------------------------------------------------------------------
 # T7: web/app.js - startup update check ordering + checkForUpdates behaviour
