@@ -52,7 +52,7 @@ else:
     _WEBVIEW_IMPORT_ERROR = None
 
 APP_NAME = "SimpleMail"
-APP_VERSION = "1.1.4"
+APP_VERSION = "1.1.5"
 APP_REPO = "super-state/SimpleMail"  # owner/repo for auto-updates
 CONFIG_DIR = Path(os.environ.get("APPDATA", str(Path.home()))) / APP_NAME
 CONFIG_FILE = CONFIG_DIR / "config.json"
@@ -805,69 +805,145 @@ def _frozen_exe_path():
     return None
 
 
-def _launch_updater(updater_path):
-    """Launch the updater script so it survives this process's exit.
+def _staged_exe_path(target):
+    """Where the downloaded update is staged, next to the app."""
+    return target.with_name(target.stem + ".new" + target.suffix)
 
-    NOTE: DETACHED_PROCESS breaks powershell -File (the script silently never
-    runs - verified empirically Aug 2026). CREATE_NEW_PROCESS_GROUP alone is
-    enough to survive the app's os._exit(); -WindowStyle Hidden keeps the
-    console out of sight.
+
+def _update_log(target, msg):
+    """Append a line to _update_log.txt next to the exe (best effort)."""
+    try:
+        with open(target.with_name("_update_log.txt"), "a", encoding="utf-8") as fh:
+            import datetime
+            fh.write(f"{datetime.datetime.now().isoformat()} {msg}\n")
+    except Exception:
+        pass
+
+
+def cleanup_update_leftovers(target=None):
+    """Delete staged .new exes and legacy _update.ps1 next to the app.
+
+    Called at startup: after a successful update the staged copy (which ran
+    as the helper) can only be removed once it has exited, i.e. by the
+    relaunched app. Failures are ignored - retried on the next launch.
     """
-    import subprocess
-
-    creationflags = getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
-    subprocess.Popen(
-        ["powershell", "-NoProfile", "-WindowStyle", "Hidden",
-         "-ExecutionPolicy", "Bypass", "-File", str(updater_path)],
-        close_fds=True, creationflags=creationflags,
-        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-    )
+    if target is None:
+        target = _frozen_exe_path()
+    if target is None:
+        return
+    for leftover in (_staged_exe_path(target), target.with_name("_update.ps1")):
+        try:
+            leftover.unlink()
+        except OSError:
+            pass
 
 
 def apply_update(asset_url):
-    """Download the new exe next to the running one and restart via updater.
+    """Download the new exe next to the running one and hand over to it.
 
-    The running exe cannot overwrite itself, so we write an _update.ps1 that
-    waits for this process to exit, replaces the exe, and relaunches it.
+    DESIGN RULE (learned across v1.0.6-v1.1.4): the OLD app's update code is
+    frozen in every already-shipped exe, so any bug in it strands those
+    installs forever - they can never update past it. Therefore the old side
+    does only the bare minimum (download, sanity-check, launch, confirm) and
+    the actual swap is performed by the NEW exe via --finish-update, whose
+    code ships fresh with every release and is therefore always fixable.
     """
     import subprocess
+    import time
 
     exe_path = _frozen_exe_path()
     if exe_path is None:
         raise RuntimeError("Updates only work when running the packaged app")
 
     target = exe_path
-    new_exe = target.with_name(target.stem + ".new" + target.suffix)
-    updater = target.with_name("_update.ps1")
+    new_exe = _staged_exe_path(target)
+    cleanup_update_leftovers(target)
 
     download_file(asset_url, new_exe)
 
-    # PowerShell updater: wait for the OLD process to fully exit, replace,
-    # restart once. The old instance holds the local port until it dies, so
-    # launching immediately races it - poll Get-Process until it's gone.
-    # (cmd's `timeout` fails in detached/redirected contexts; PowerShell's
-    # Start-Sleep does not, so we use a .ps1 instead of a .bat.)
-    # NOTE: build the script with .replace(), NOT str.format() - PowerShell's
-    # literal braces (while {...}, Start-Sleep) get parsed by format() as
-    # replacement fields and raise KeyError ('\n  Start-Sleep -Seconds 2\n').
-    ps = (
-        "$target = '__TARGET__'\n"
-        "$new = '__NEW_EXE__'\n"
-        "while (Get-Process -Name SimpleMail -ErrorAction SilentlyContinue) {\n"
-        "  Start-Sleep -Seconds 2\n"
-        "}\n"
-        "Copy-Item -Force $new $target\n"
-        "Remove-Item -Force $new\n"
-        "Start-Process -FilePath $target\n"
-        "Remove-Item -Force $PSCommandPath -ErrorAction SilentlyContinue\n"
-    ).replace("__TARGET__", str(target)).replace("__NEW_EXE__", str(new_exe))
-    updater.write_text(ps, encoding="utf-8")
+    # Sanity: a real Windows exe, not a truncated download or an HTML error
+    # page saved to disk. MZ magic + a size no onefile build could be under.
+    try:
+        with open(new_exe, "rb") as fh:
+            magic = fh.read(2)
+        if magic != b"MZ" or new_exe.stat().st_size < 1_000_000:
+            raise RuntimeError(
+                f"Downloaded update is not a valid app ({new_exe.stat().st_size} bytes)")
+    except Exception:
+        try:
+            new_exe.unlink()
+        except OSError:
+            pass
+        raise
 
-    # launch the updater, then exit so the file unlocks
-    _launch_updater(updater)
-    import time
-    time.sleep(2)
+    # Hand over to the NEW exe. NOTE: DETACHED_PROCESS breaks child console
+    # processes in this context (v1.1.4 regression - silently never ran);
+    # CREATE_NEW_PROCESS_GROUP alone is enough to survive our os._exit().
+    creationflags = getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
+    try:
+        proc = subprocess.Popen(
+            [str(new_exe), "--finish-update", str(target), str(os.getpid())],
+            close_fds=True, creationflags=creationflags,
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+        )
+    except OSError as e:
+        try:
+            new_exe.unlink()
+        except OSError:
+            pass
+        raise RuntimeError(f"Could not launch the downloaded update: {e}")
+
+    # Confirm the helper survived its first seconds before we die: if the
+    # download is broken enough to crash on boot, stay alive and report it
+    # instead of exiting into nothing.
+    time.sleep(3)
+    if proc.poll() is not None:
+        try:
+            new_exe.unlink()
+        except OSError:
+            pass
+        raise RuntimeError(
+            f"Update helper exited early (code {proc.returncode})")
+
+    _update_log(target, f"handover to {new_exe.name} ok, exiting for swap")
     os._exit(0)
+
+
+def finish_update(target, old_pid=None, self_path=None, sleep=None, timeout=120):
+    """Run inside the NEW exe (--finish-update): swap ourselves in.
+
+    Waits for the old app to release its exe (copying over a running exe
+    raises PermissionError - that IS the wait condition, and unlike the old
+    Get-Process polling it works whatever the exe file is named), copies this
+    binary over it and relaunches. If the swap never succeeds, relaunch the
+    old exe so the user is never left with no app at all.
+    """
+    import shutil
+    import subprocess
+    import time as _time
+
+    sleep = sleep or _time.sleep
+    target = Path(target)
+    me = Path(self_path or sys.executable)
+
+    swapped = False
+    deadline = _time.monotonic() + timeout
+    while _time.monotonic() < deadline:
+        try:
+            shutil.copyfile(me, target)
+            swapped = True
+            break
+        except OSError:
+            sleep(1)
+    _update_log(target, "swap ok" if swapped
+                else f"swap FAILED after {timeout}s (old pid {old_pid} still alive?)")
+
+    creationflags = getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
+    subprocess.Popen(
+        [str(target)], close_fds=True, creationflags=creationflags,
+        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+    )
+    os._exit(0 if swapped else 1)
 
 
 # ---------------------------------------------------------------------------
@@ -1285,6 +1361,15 @@ class MailPoller(threading.Thread):
 # ---------------------------------------------------------------------------
 
 def main():
+    # Update helper mode: this process IS the freshly downloaded exe, asked
+    # by the old app to swap itself in. Must run before config/GUI setup.
+    if len(sys.argv) >= 3 and sys.argv[1] == "--finish-update":
+        finish_update(sys.argv[2], sys.argv[3] if len(sys.argv) > 3 else None)
+        return 0  # unreachable - finish_update never returns
+
+    # Normal start: clear leftovers from a completed (or failed) update.
+    cleanup_update_leftovers()
+
     cfg = Config()
 
     if "--check" in sys.argv:
