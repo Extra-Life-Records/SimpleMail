@@ -52,7 +52,7 @@ else:
     _WEBVIEW_IMPORT_ERROR = None
 
 APP_NAME = "SimpleMail"
-APP_VERSION = "1.1.6"
+APP_VERSION = "1.1.7"
 APP_REPO = "super-state/SimpleMail"  # owner/repo for auto-updates
 CONFIG_DIR = Path(os.environ.get("APPDATA", str(Path.home()))) / APP_NAME
 CONFIG_FILE = CONFIG_DIR / "config.json"
@@ -287,14 +287,19 @@ def fetch_envelopes(imap, folder, limit):
         pass
 
     # Pass 2: headers + 200-byte body peek, batched. Response items alternate
-    # (desc_line, payload) tuples per message part.
+    # (desc_line, payload) tuples per message part. Content-Type and
+    # Content-Transfer-Encoding ride along so single-part bodies can be
+    # decoded (quoted-printable receipts showed raw =0A codes in previews).
     envelopes = []
     try:
         typ, fdata = imap.uid(
             "fetch", uidlist,
-            "(BODY.PEEK[HEADER.FIELDS (FROM SUBJECT DATE)] BODY.PEEK[TEXT]<0.2000>)",
+            "(BODY.PEEK[HEADER.FIELDS (FROM SUBJECT DATE"
+            " CONTENT-TYPE CONTENT-TRANSFER-ENCODING)]"
+            " BODY.PEEK[TEXT]<0.2000>)",
         )
         cur = None  # current envelope being assembled
+        cur_cte = cur_ctype = ""
         for item in fdata:
             if not isinstance(item, tuple):
                 continue
@@ -305,6 +310,8 @@ def fetch_envelopes(imap, folder, limit):
                 if not m:
                     continue
                 msg = message_from_bytes(payload, policy=email_policy)
+                cur_cte = str(msg.get("Content-Transfer-Encoding", ""))
+                cur_ctype = str(msg.get("Content-Type", ""))
                 cur = {
                     "uid": m.group(1),
                     "sender": str(msg.get("From", "")),
@@ -315,7 +322,7 @@ def fetch_envelopes(imap, folder, limit):
                 }
                 envelopes.append(cur)
             elif "BODY[TEXT]" in desc and cur is not None:
-                snippet = decode_snippet(payload)
+                snippet = decode_snippet(payload, cur_cte, cur_ctype)
                 cur["snippet"] = snippet[:180]
     except Exception:
         pass
@@ -323,7 +330,41 @@ def fetch_envelopes(imap, folder, limit):
     return envelopes
 
 
-def decode_snippet(raw):
+def decode_transfer(raw, cte, ctype=""):
+    """Undo the Content-Transfer-Encoding on a raw body peek.
+
+    The peek is truncated at 2000 bytes, so it can end mid quoted-printable
+    escape or mid base64 quantum - decode what is whole, never raise.
+    """
+    cte = (cte or "").strip().lower()
+    data = raw
+    if cte == "quoted-printable":
+        import quopri
+        # drop a trailing partial escape ("=" or "=C") cut off by the peek
+        clipped = re.sub(rb"=[0-9A-Fa-f]?$", b"", raw)
+        try:
+            data = quopri.decodestring(clipped)
+        except Exception:
+            data = raw
+    elif cte == "base64":
+        import base64
+        b = re.sub(rb"\s+", b"", raw)
+        b = b[: len(b) - (len(b) % 4)]  # truncated peek: drop partial quantum
+        try:
+            data = base64.b64decode(b)
+        except Exception:
+            data = raw
+    charset = "utf-8"
+    m = re.search(r'charset="?([\w.-]+)"?', ctype or "", re.I)
+    if m:
+        charset = m.group(1)
+    try:
+        return data.decode(charset, "replace")
+    except Exception:
+        return data.decode("utf-8", "replace")
+
+
+def decode_snippet(raw, cte="", ctype=""):
     """Turn a raw BODY[TEXT] peek into a clean one-line preview.
 
     The peek is the *start of the MIME structure* for multipart messages:
@@ -331,6 +372,11 @@ def decode_snippet(raw):
     the body (quoted-printable or base64). We extract the real boundary
     name, re-wrap it as a multipart message, and pick the longest readable
     text part - so previews are real sentences, not MIME scaffolding.
+
+    Single-part messages have no such scaffolding: their body arrives still
+    wearing the transfer encoding declared in the top-level headers, so it
+    is undone here (regression: quoted-printable receipts previewed as
+    "=0A=0A =0A ..." until v1.1.7).
     """
     if not raw:
         return ""
@@ -377,7 +423,9 @@ def decode_snippet(raw):
                 return best
         except Exception:
             pass
-    # not multipart scaffolding - plain text or html directly
+    # not multipart scaffolding - a single-part body: undo its declared
+    # transfer encoding, then flatten (html or plain)
+    text = decode_transfer(raw, cte, ctype)
     if "<" in text:
         return collapse_snippet(html_to_text(text))
     return collapse_snippet(text)

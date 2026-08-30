@@ -26,6 +26,9 @@ Covers the paths that bit real releases:
       THIS machine's arch (regression: v1.1.0 shipped x64-only)
   T7  web/app.js startup update-check ordering + checkForUpdates behaviour
       (node vm harness; skipped if node is unavailable)
+  T8  inbox snippet decoding: single-part bodies must shed their declared
+      Content-Transfer-Encoding (regression: quoted-printable receipts
+      previewed as raw "=0A=0A =0A" codes until v1.1.7)
 
 SAFETY RULES (learned the hard way):
   * Never launch a real app instance from a test - a launched instance reads
@@ -510,6 +513,39 @@ if shutil.which("node"):
                 pass
 else:
     print("SKIP  T7: node not on PATH")
+
+# ---------------------------------------------------------------------------
+# T8: inbox snippet decoding (single-part transfer encodings)
+# ---------------------------------------------------------------------------
+
+qp = (b"Your PayPal receipt=0A=0AAmount: =C2=A32.99=0AThanks =\r\n"
+      b"for shopping=0A=C3")  # ends mid-escape, like a truncated peek
+s = m.decode_snippet(qp, "quoted-printable", 'text/plain; charset="utf-8"')
+check("T8: quoted-printable single part decodes (PayPal =0A regression)",
+      "=0A" not in s and "£2.99" in s
+      and s.startswith("Your PayPal receipt")
+      and "Thanks for shopping" in s, s)
+
+s = m.decode_snippet(b"Caf=E9 menu=0Aupdated", "quoted-printable",
+                     'text/plain; charset="iso-8859-1"')
+check("T8: declared charset honoured", s == "Café menu updated", s)
+
+import base64 as _b64
+enc = _b64.b64encode(b"Hello from base64 land, this is the preview text")
+s = m.decode_snippet(enc[:-3], "base64", "text/plain")  # truncated quantum
+check("T8: truncated base64 single part decodes what is whole",
+      s.startswith("Hello from base64 land"), s)
+
+s = m.decode_snippet(b"plain old text body\r\nsecond line")
+check("T8: no declared encoding -> passthrough",
+      s == "plain old text body second line", s)
+
+mp = (b"--BOUND\r\nContent-Type: text/plain; charset=utf-8\r\n"
+      b"Content-Transfer-Encoding: quoted-printable\r\n\r\n"
+      b"Real=0Amultipart=0Abody text here\r\n--BOUND--\r\n")
+s = m.decode_snippet(mp, "", 'multipart/alternative; boundary="BOUND"')
+check("T8: multipart previews still decoded via the MIME walk",
+      "Real multipart body text here" in s and "=0A" not in s, s)
 
 # ---------------------------------------------------------------------------
 shutil.rmtree(SCRATCH, ignore_errors=True)
