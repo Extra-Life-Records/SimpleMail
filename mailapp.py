@@ -52,7 +52,7 @@ else:
     _WEBVIEW_IMPORT_ERROR = None
 
 APP_NAME = "SimpleMail"
-APP_VERSION = "1.1.5"
+APP_VERSION = "1.1.6"
 APP_REPO = "super-state/SimpleMail"  # owner/repo for auto-updates
 CONFIG_DIR = Path(os.environ.get("APPDATA", str(Path.home()))) / APP_NAME
 CONFIG_FILE = CONFIG_DIR / "config.json"
@@ -938,11 +938,27 @@ def finish_update(target, old_pid=None, self_path=None, sleep=None, timeout=120)
     _update_log(target, "swap ok" if swapped
                 else f"swap FAILED after {timeout}s (old pid {old_pid} still alive?)")
 
+    # Relaunch. The old app's WebView2 children can outlive it by a couple
+    # of seconds and hold the browser-profile lock; an instant relaunch then
+    # crashes on startup (seen live on v1.1.5's first field swap). Give them
+    # time to let go, and retry if the app dies right after starting.
     creationflags = getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
-    subprocess.Popen(
-        [str(target)], close_fds=True, creationflags=creationflags,
-        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-    )
+    for attempt in range(3):
+        sleep(3)
+        proc = subprocess.Popen(
+            [str(target)], close_fds=True, creationflags=creationflags,
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+        )
+        alive = True
+        for _ in range(6):
+            sleep(1)
+            if proc.poll() is not None:
+                alive = False
+                break
+        if alive:
+            break
+        _update_log(target, f"relaunch attempt {attempt + 1} exited "
+                            f"code {proc.returncode}, retrying")
     os._exit(0 if swapped else 1)
 
 
@@ -1434,24 +1450,6 @@ def main():
 
     api = Api(cfg)
     icon_path = _BASE_DIR / "assets" / "icon.ico"
-    window = webview.create_window(
-        f"SimpleMail v{APP_VERSION}",
-        url=url,
-        js_api=api,
-        width=1240,
-        height=800,
-        min_size=(980, 620),
-        background_color="#f6f8fb",
-    )
-    global _API_WINDOW
-    _API_WINDOW = window  # lets Api.pick_image open a file dialog
-    # Title-bar icon (pywebview 5.x has no icon kwarg; set it on the native form)
-    if os.name == "nt" and icon_path.exists():
-        try:
-            from System.Drawing import Icon as NetIcon  # type: ignore
-            window.native.Icon = NetIcon(str(icon_path))
-        except Exception:
-            pass
 
     # Native inbox notifications (like Outlook): one quiet poller per account,
     # each toast labelled with its mailbox so arrivals are never ambiguous.
@@ -1462,8 +1460,39 @@ def main():
             poller.start()
             pollers.append(poller)
 
+    # GUI startup can fail transiently right after an update swap: the old
+    # instance's WebView2 children hold the browser-profile lock for a couple
+    # of seconds after it exits. Retry once instead of dying into the
+    # "Unhandled exception in script" dialog.
+    import time as _time
     try:
-        webview.start()
+        for attempt in (1, 2):
+            try:
+                window = webview.create_window(
+                    f"SimpleMail v{APP_VERSION}",
+                    url=url,
+                    js_api=api,
+                    width=1240,
+                    height=800,
+                    min_size=(980, 620),
+                    background_color="#f6f8fb",
+                )
+                global _API_WINDOW
+                _API_WINDOW = window  # lets Api.pick_image open a file dialog
+                # Title-bar icon (pywebview 5.x has no icon kwarg; set it on
+                # the native form)
+                if os.name == "nt" and icon_path.exists():
+                    try:
+                        from System.Drawing import Icon as NetIcon  # type: ignore
+                        window.native.Icon = NetIcon(str(icon_path))
+                    except Exception:
+                        pass
+                webview.start()
+                break
+            except Exception:
+                if attempt == 2:
+                    raise
+                _time.sleep(4)
     finally:
         for poller in pollers:
             poller.stop()

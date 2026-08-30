@@ -287,6 +287,7 @@ class FakeResponse:
 
 
 orig_urlopen = urllib.request.urlopen
+orig_arch = m.current_arch
 
 
 def fake_urlopen(payload):
@@ -317,6 +318,7 @@ try:
     check("T4: junk tag -> None", info is None)
 finally:
     urllib.request.urlopen = orig_urlopen
+    m.current_arch = orig_arch  # leak broke T6: it must test THIS machine's arch
 
 # ---------------------------------------------------------------------------
 # T5: check_update error surfacing
