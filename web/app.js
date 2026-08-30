@@ -164,11 +164,10 @@ async function loadMessages() {
     const res = await api.list_messages(state.activeAccountId, folder.server);
     state.messages = res.envelopes;
     renderMessages();
-    $("folder-count").textContent = `${res.unread} unread · ${state.messages.length} shown`;
-    // update inbox badge in sidebar
-    const ib = state.folders.find((f) => f.key === "inbox");
-    if (ib && state.currentFolder === "inbox") ib.unread = res.unread;
-    renderFolders();
+    // one source of truth: the server's whole-folder count. res.unread only
+    // counts the loaded page, so it would undercount a busy folder.
+    folder.unread = res.folder_unread == null ? res.unread : res.folder_unread;
+    updateUnreadCount();
   } catch (e) {
     $("msg-list").innerHTML = '<div class="empty">Failed to load. Check settings.</div>';
     toast(String(e), true);
@@ -269,18 +268,28 @@ async function openMessage(uid, el) {
     // mark row as read locally; backend already marked it seen
     if (el) { el.classList.remove("unread"); el.classList.add("seen"); el.classList.add("selected"); }
     const idx = state.messages.findIndex((m) => m.uid === uid);
+    const wasUnread = idx >= 0 && !state.messages[idx].seen;
     if (idx >= 0) state.messages[idx].seen = true;
-    updateUnreadCount();
+    updateUnreadCount(wasUnread ? -1 : 0);
   } catch (e) {
     $("read-body").innerHTML = '<div class="empty">Failed to open message.</div>';
     toast(String(e), true);
   }
 }
 
-function updateUnreadCount() {
+/* Keep the folder header AND the sidebar badge in step.
+   delta shifts the stored folder count when a message changes read state
+   (reading one, marking it unread, deleting or moving an unread one). It is
+   a delta, never a recount: the stored figure covers the whole folder, but
+   state.messages only holds the loaded page. */
+function updateUnreadCount(delta = 0) {
   const folder = state.folders.find((f) => f.key === state.currentFolder);
-  const unread = state.messages.filter((m) => !m.seen).length;
+  if (folder && delta) folder.unread = Math.max(0, (folder.unread || 0) + delta);
+  const unread = folder && typeof folder.unread === "number"
+    ? folder.unread
+    : state.messages.filter((m) => !m.seen).length;
   $("folder-count").textContent = `${unread} unread · ${state.messages.length} shown`;
+  renderFolders();  // the badge moves with the header - it used to go stale
 }
 
 /* ---------------- compose ----------------
@@ -641,9 +650,10 @@ async function markUnread() {
   try {
     await api.set_seen(state.activeAccountId, folder.server, state.selectedUid, false);
     const idx = state.messages.findIndex((m) => m.uid === state.selectedUid);
+    const wasRead = idx >= 0 && state.messages[idx].seen;
     if (idx >= 0) state.messages[idx].seen = false;
     renderMessages();
-    updateUnreadCount();
+    updateUnreadCount(wasRead ? 1 : 0);
     toast("Marked as unread");
   } catch (e) {
     toast("Failed: " + e, true);
@@ -655,13 +665,14 @@ async function deleteSelected() {
   if (!confirm("Delete this message?")) return;
   const folder = state.folders.find((f) => f.key === state.currentFolder);
   try {
+    const gone = state.messages.find((m) => m.uid === state.selectedUid);
     await api.delete_message(state.activeAccountId, folder.server, state.selectedUid);
     state.messages = state.messages.filter((m) => m.uid !== state.selectedUid);
     state.selectedUid = null;
     $("read-header").style.display = "none";
     $("read-body").innerHTML = '<div id="loading">Select a message</div>';
     renderMessages();
-    updateUnreadCount();
+    updateUnreadCount(gone && !gone.seen ? -1 : 0);
     toast("Deleted");
   } catch (e) {
     toast("Delete failed: " + e, true);
@@ -758,7 +769,10 @@ async function ctxMoveTo(target) {
       $("read-body").innerHTML = '<div id="loading">Select a message</div>';
     }
     renderMessages();
-    updateUnreadCount();
+    // an unread message leaves this folder's count and joins the target's
+    const dest = state.folders.find((f) => f.server === target);
+    if (!msg.seen && dest) dest.unread = (dest.unread || 0) + 1;
+    updateUnreadCount(msg.seen ? 0 : -1);
     if (res.learned) {
       toast(`Moved & learned: mail from ${res.learned} → ${target} from now on`);
     } else {

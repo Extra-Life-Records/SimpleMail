@@ -52,7 +52,7 @@ else:
     _WEBVIEW_IMPORT_ERROR = None
 
 APP_NAME = "SimpleMail"
-APP_VERSION = "1.1.8"
+APP_VERSION = "1.1.9"
 APP_REPO = "super-state/SimpleMail"  # owner/repo for auto-updates
 CONFIG_DIR = Path(os.environ.get("APPDATA", str(Path.home()))) / APP_NAME
 CONFIG_FILE = CONFIG_DIR / "config.json"
@@ -328,6 +328,24 @@ def fetch_envelopes(imap, folder, limit):
         pass
     envelopes.reverse()
     return envelopes
+
+
+def count_unread(imap, folder):
+    """Unread count for the WHOLE folder, straight from the server.
+
+    The envelope list is only the most recent page of messages, so counting
+    unseen ones in it undercounts a busy folder. Both the sidebar badge and
+    the folder header use this instead, so they can never disagree.
+    Returns None if the server would not say.
+    """
+    try:
+        imap.select(folder, readonly=True)
+        typ, data = imap.uid("search", None, "UNSEEN")
+        if typ != "OK" or not data or not data[0]:
+            return 0
+        return len(data[0].split())
+    except Exception:
+        return None
 
 
 def decode_transfer(raw, cte, ctype=""):
@@ -1089,12 +1107,7 @@ class Api:
                 try:
                     folders = map_folders(server_folders)
                     for f in folders:
-                        try:
-                            imap.select(f["server"], readonly=True)
-                            typ, data = imap.uid("search", None, "UNSEEN")
-                            f["unread"] = len(data[0].split()) if typ == "OK" and data and data[0] else 0
-                        except Exception:
-                            f["unread"] = 0
+                        f["unread"] = count_unread(imap, f["server"]) or 0
                 finally:
                     imap.logout()
             except Exception as e:
@@ -1148,6 +1161,7 @@ class Api:
         imap, _, _ = connect_imap(acct)
         try:
             envelopes = fetch_envelopes(imap, server_folder, int(self.cfg["max_messages"]))
+            folder_unread = count_unread(imap, server_folder)
         finally:
             imap.logout()
         envelopes, moved = apply_rules(self.cfg, account_id, server_folder, envelopes)
@@ -1157,10 +1171,16 @@ class Api:
             try:
                 envelopes = fetch_envelopes(imap2, server_folder, int(self.cfg["max_messages"]))
                 envelopes, _ = apply_rules(self.cfg, account_id, server_folder, envelopes)
+                folder_unread = count_unread(imap2, server_folder)
             finally:
                 imap2.logout()
         unread = sum(1 for e in envelopes if not e["seen"])
-        return {"envelopes": envelopes, "unread": unread, "auto_moved": moved}
+        return {
+            "envelopes": envelopes,
+            "unread": unread,                  # unseen among the loaded page
+            "folder_unread": folder_unread,    # whole folder, per the server
+            "auto_moved": moved,
+        }
 
     def get_message(self, account_id, server_folder, uid):
         self._log(f"CALL get_message {account_id} {server_folder} {uid}")
