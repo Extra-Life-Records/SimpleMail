@@ -29,6 +29,9 @@ Covers the paths that bit real releases:
   T8  inbox snippet decoding: single-part bodies must shed their declared
       Content-Transfer-Encoding (regression: quoted-printable receipts
       previewed as raw "=0A=0A =0A" codes until v1.1.7)
+  T9  unread counting, both sides (regression: reading a message left the
+      sidebar badge stale forever, and the header counted only the loaded
+      page while the badge counted the whole folder)
 
 SAFETY RULES (learned the hard way):
   * Never launch a real app instance from a test - a launched instance reads
@@ -560,6 +563,125 @@ mp = (b"--BOUND\r\nContent-Type: text/plain; charset=utf-8\r\n"
 s = m.decode_snippet(mp, "", 'multipart/alternative; boundary="BOUND"')
 check("T8: multipart previews still decoded via the MIME walk",
       "Real multipart body text here" in s and "=0A" not in s, s)
+
+# ---------------------------------------------------------------------------
+# T9: unread counting - python side (whole-folder count, not the loaded page)
+# ---------------------------------------------------------------------------
+
+class FakeImap:
+    """Minimal IMAP stand-in for count_unread."""
+
+    def __init__(self, unseen=0, typ="OK", boom=False):
+        self.unseen, self.typ, self.boom = unseen, typ, boom
+        self.selected = None
+        self.readonly = None
+
+    def select(self, folder, readonly=False):
+        if self.boom:
+            raise RuntimeError("connection dropped")
+        self.selected, self.readonly = folder, readonly
+        return ("OK", [b"1"])
+
+    def uid(self, cmd, *args):
+        assert cmd == "search" and args[1] == "UNSEEN", (cmd, args)
+        if not self.unseen:
+            return (self.typ, [b""])
+        return (self.typ, [b" ".join(str(i + 1).encode() for i in range(self.unseen))])
+
+
+fi = FakeImap(unseen=25)
+check("T9: count_unread returns the server's whole-folder count",
+      m.count_unread(fi, "INBOX") == 25, str(m.count_unread(fi, "INBOX")))
+check("T9: count_unread never mutates the mailbox (readonly select)",
+      fi.readonly is True and fi.selected == "INBOX", f"{fi.readonly} {fi.selected}")
+check("T9: empty UNSEEN result -> 0", m.count_unread(FakeImap(unseen=0), "INBOX") == 0)
+check("T9: refused search -> 0", m.count_unread(FakeImap(unseen=3, typ="NO"), "INBOX") == 0)
+check("T9: broken connection -> None (caller falls back)",
+      m.count_unread(FakeImap(boom=True), "INBOX") is None)
+
+# ---------------------------------------------------------------------------
+# T9b: unread counting - web/app.js (badge tracks the header)
+# ---------------------------------------------------------------------------
+
+fn9 = re.search(r"function updateUnreadCount\(delta = 0\) \{(.*?)\n\}", js, re.S)
+read_start = js.index("    // mark row as read locally")
+read_end = js.index("updateUnreadCount(wasUnread ? -1 : 0);", read_start) + len(
+    "updateUnreadCount(wasUnread ? -1 : 0);")
+
+HARNESS9 = r"""
+const fs = require('fs'), vm = require('vm');
+const fnSrc = fs.readFileSync(process.argv[2], 'utf8');
+const readSrc = fs.readFileSync(process.argv[3], 'utf8');
+let ok = true;
+const t = (name, cond, detail = '') => {
+  console.log((cond ? 'PASS  ' : 'FAIL  ') + name + (cond ? '' : '  [' + detail + ']'));
+  if (!cond) ok = false;
+};
+const mk = (folders, messages) => {
+  const header = { textContent: '' };
+  const seen = { renders: 0 };
+  const ctx = vm.createContext({
+    state: { folders, messages, currentFolder: 'inbox' },
+    $: () => header,
+    renderFolders: () => seen.renders++,
+  });
+  vm.runInContext(fnSrc, ctx);
+  return { ctx, header, seen };
+};
+// reading an unread message drops BOTH the header and the stored badge count
+let { ctx, header, seen } = mk([{ key: 'inbox', unread: 6 }], [{ uid: '1', seen: false }]);
+vm.runInContext('(function(uid, el){' + readSrc + '})("1", null)', ctx);
+t('T9b: reading an unread message decrements the folder count',
+  ctx.state.folders[0].unread === 5, JSON.stringify(ctx.state.folders));
+t('T9b: header follows', header.textContent === '5 unread · 1 shown', header.textContent);
+t('T9b: sidebar re-rendered so the badge cannot go stale', seen.renders > 0, String(seen.renders));
+// re-opening an already-read message must not decrement again
+vm.runInContext('(function(uid, el){' + readSrc + '})("1", null)', ctx);
+t('T9b: re-reading the same message does not double-count',
+  ctx.state.folders[0].unread === 5, JSON.stringify(ctx.state.folders));
+// the count never goes negative
+({ ctx, header } = mk([{ key: 'inbox', unread: 0 }], [{ uid: '1', seen: false }]));
+vm.runInContext('updateUnreadCount(-1)', ctx);
+t('T9b: count floors at zero', ctx.state.folders[0].unread === 0, String(ctx.state.folders[0].unread));
+// header shows the whole-folder count, not just the loaded page
+({ ctx, header } = mk([{ key: 'inbox', unread: 25 }],
+  [{ uid: '1', seen: true }, { uid: '2', seen: true }, { uid: '3', seen: true }]));
+vm.runInContext('updateUnreadCount(0)', ctx);
+t('T9b: header reports the whole folder, not the loaded page',
+  header.textContent === '25 unread · 3 shown', header.textContent);
+// marking unread again puts one back
+vm.runInContext('updateUnreadCount(1)', ctx);
+t('T9b: marking unread adds one back', ctx.state.folders[0].unread === 26,
+  String(ctx.state.folders[0].unread));
+console.log(ok ? 'NODE-JS OK' : 'NODE-JS FAILED');
+process.exit(ok ? 0 : 1);
+"""
+
+if shutil.which("node") and fn9:
+    paths = []
+    for src in (HARNESS9,
+                "function updateUnreadCount(delta = 0) {" + fn9.group(1) + "\n}",
+                js[read_start:read_end]):
+        with tempfile.NamedTemporaryFile("w", suffix=".js", prefix="sm-t9-", delete=False,
+                                         dir=os.environ.get("TEMP")) as fh:
+            fh.write(src)
+            paths.append(fh.name)
+    try:
+        p = subprocess.run(["node", *paths], capture_output=True, text=True, timeout=90)
+        print(p.stdout.strip())
+        if p.stderr.strip():
+            print("node stderr:", p.stderr.strip()[:300])
+        check("T9b: node vm unread checks passed", p.returncode == 0, p.stderr.strip()[:200])
+    finally:
+        for f in paths:
+            try:
+                os.unlink(f)
+            except OSError:
+                pass
+elif not fn9:
+    check("T9b: updateUnreadCount(delta) found in app.js", False, "signature changed")
+else:
+    print("SKIP  T9b: node not on PATH")
 
 # ---------------------------------------------------------------------------
 shutil.rmtree(SCRATCH, ignore_errors=True)
