@@ -540,6 +540,20 @@ s = m.decode_snippet(b"plain old text body\r\nsecond line")
 check("T8: no declared encoding -> passthrough",
       s == "plain old text body second line", s)
 
+zipb = _b64.b64encode(b"PK\x03\x04\x14\x00\x00\x00\x08\x00fake-zip-bytes" * 20)
+s = m.decode_snippet(zipb, "base64",
+                     'application/zip; name="google.com!playloudr.com!1756.zip"')
+check("T8: binary single part never previews bytes (DMARC zip regression)",
+      s == "(google.com!playloudr.com!1756.zip)", s)
+
+s = m.decode_snippet(_b64.b64encode(b"\x00\x01binary"), "base64",
+                     "application/octet-stream")
+check("T8: unnamed binary part -> (attachment)", s == "(attachment)", s)
+
+s = m.decode_snippet(b"PK\x03\x04 junk\x00\x01 then text", "", "")
+check("T8: control chars stripped even when type is unknown",
+      "\x00" not in s and "\x03" not in s, repr(s))
+
 mp = (b"--BOUND\r\nContent-Type: text/plain; charset=utf-8\r\n"
       b"Content-Transfer-Encoding: quoted-printable\r\n\r\n"
       b"Real=0Amultipart=0Abody text here\r\n--BOUND--\r\n")
