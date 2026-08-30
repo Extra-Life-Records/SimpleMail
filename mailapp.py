@@ -52,7 +52,7 @@ else:
     _WEBVIEW_IMPORT_ERROR = None
 
 APP_NAME = "SimpleMail"
-APP_VERSION = "1.1.7"
+APP_VERSION = "1.1.8"
 APP_REPO = "super-state/SimpleMail"  # owner/repo for auto-updates
 CONFIG_DIR = Path(os.environ.get("APPDATA", str(Path.home()))) / APP_NAME
 CONFIG_FILE = CONFIG_DIR / "config.json"
@@ -423,8 +423,14 @@ def decode_snippet(raw, cte="", ctype=""):
                 return best
         except Exception:
             pass
-    # not multipart scaffolding - a single-part body: undo its declared
-    # transfer encoding, then flatten (html or plain)
+    # not multipart scaffolding - a single-part body. Binary types (DMARC
+    # reports are a bare application/zip body) have nothing readable to
+    # preview: decoding them spills raw zip bytes ("PK..") into the inbox.
+    main_type = (ctype or "").split(";")[0].strip().lower()
+    if main_type and not main_type.startswith(("text/", "message/")):
+        name = re.search(r'name="?([^";\r\n]+)"?', ctype or "", re.I)
+        return f"({name.group(1)})" if name else "(attachment)"
+    # undo the declared transfer encoding, then flatten (html or plain)
     text = decode_transfer(raw, cte, ctype)
     if "<" in text:
         return collapse_snippet(html_to_text(text))
@@ -433,7 +439,10 @@ def decode_snippet(raw, cte="", ctype=""):
 
 def collapse_snippet(s):
     """Flatten whitespace/newlines into a single readable line."""
-    s = re.sub(r"\s+", " ", s or "")
+    # binary residue (control chars, undecodable-byte marks) never belongs
+    # in a preview, whatever the declared content type claimed
+    s = re.sub(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f�]+", " ", s or "")
+    s = re.sub(r"\s+", " ", s)
     return s.strip()
 
 
