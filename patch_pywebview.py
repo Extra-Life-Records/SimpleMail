@@ -78,12 +78,26 @@ def main():
     src = WINFORMS.read_text(encoding="utf-8")
     if OLD not in src:
         if NEW in src:
-            print("Already patched - nothing to do.")
-            return 0
-        print("WARNING: expected pattern not found; file may have changed.")
-        return 1
-    WINFORMS.write_text(src.replace(OLD, NEW), encoding="utf-8")
-    print(f"Patched {WINFORMS}")
+            print("WinForms compatibility patch already applied.")
+        else:
+            print("WARNING: expected pattern not found; file may have changed.")
+            return 1
+    else:
+        WINFORMS.write_text(src.replace(OLD, NEW), encoding="utf-8")
+        print(f"Patched {WINFORMS}")
+    # pywebview 5.3.2 hides ordinary Copy/Paste and keyboard accelerators
+    # unless debug is on. Enable those independently; keep DevTools disabled.
+    edge = WINFORMS.with_name("edgechromium.py")
+    source = edge.read_text(encoding="utf-8")
+    for setting in ("AreDefaultContextMenusEnabled", "AreBrowserAcceleratorKeysEnabled"):
+        old = f"settings.{setting} = _settings['debug']"
+        new = f"settings.{setting} = True  # SimpleMail editing controls"
+        if old not in source and new not in source:
+            print(f"Expected Edge setting not found: {setting}")
+            return 1
+        source = source.replace(old, new)
+    edge.write_text(source, encoding="utf-8")
+    print("Enabled normal editing menus and keyboard shortcuts.")
     return 0
 
 

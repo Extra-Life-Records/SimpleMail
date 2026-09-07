@@ -52,7 +52,7 @@ else:
     _WEBVIEW_IMPORT_ERROR = None
 
 APP_NAME = "SimpleMail"
-APP_VERSION = "1.1.9"
+APP_VERSION = "1.2.0"
 APP_REPO = "super-state/SimpleMail"  # owner/repo for auto-updates
 CONFIG_DIR = Path(os.environ.get("APPDATA", str(Path.home()))) / APP_NAME
 CONFIG_FILE = CONFIG_DIR / "config.json"
@@ -1549,6 +1549,7 @@ def main():
                     f"SimpleMail v{APP_VERSION}",
                     url=url,
                     js_api=api,
+                    text_select=True,
                     width=1240,
                     height=800,
                     min_size=(980, 620),
