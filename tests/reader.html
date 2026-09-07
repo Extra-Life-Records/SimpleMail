@@ -1,0 +1,41 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>SimpleMail reader checks</title>
+<h1>SimpleMail reader checks</h1>
+<p id="result">Running…</p>
+<div id="read-body"></div>
+<textarea aria-label="Paste copied email text here" placeholder="Paste copied email text here"></textarea>
+<script>
+// Load real reader functions, without booting a mailbox or its native bridge.
+fetch('../web/app.js').then(r => r.text()).then(source => {
+  const {sanitizeHtml, safeEmailLink, appendLinkedText} = new Function(
+    source.replace('window.addEventListener("DOMContentLoaded", boot);', '') +
+    '\nreturn {sanitizeHtml, safeEmailLink, appendLinkedText};'
+  )();
+  const fixture = '<style>body{user-select:none}</style><p>Select and copy this email text.</p>' +
+    '<a href="https://aws.amazon.com/" target="_self">Open AWS</a>' +
+    '<a href="java&#x73;cript:alert(1)">Blocked script link</a>' +
+    '<a href="file:///C:/Windows/win.ini">Blocked file link</a>' +
+    '<script>window.bad=true<\/script><img onerror="alert(1)"><base href="https://invalid.example">';
+  const rendered = sanitizeHtml(fixture);
+  const doc = new DOMParser().parseFromString(rendered, 'text/html');
+  const assert = (value, reason) => { if (!value) throw new Error(reason); };
+  assert(!doc.querySelector('script,base,[onerror]'), 'Active email content remained');
+  const links = [...doc.querySelectorAll('a')];
+  assert(links[0].target === '_blank' && links[0].rel.includes('noopener'), 'External link routing');
+  assert(!links[1].hasAttribute('href') && !links[2].hasAttribute('href'), 'Unsafe URL scheme');
+  assert(safeEmailLink('mailto:hello@example.com') === 'mailto:hello@example.com', 'Email address link');
+  assert(safeEmailLink('/relative') === null, 'Relative link escaped to local app');
+  const pre = document.createElement('pre');
+  appendLinkedText(pre, 'Visit https://aws.amazon.com/ then https://example.com/.');
+  assert(pre.querySelectorAll('a').length === 2, 'Plain-text links');
+  assert(pre.textContent === 'Visit https://aws.amazon.com/ then https://example.com/.', 'Plain text changed');
+  const iframe = document.createElement('iframe');
+  iframe.title = 'Selectable email with a working external link';
+  iframe.sandbox = 'allow-popups allow-popups-to-escape-sandbox';
+  iframe.srcdoc = rendered;
+  iframe.style = 'width:100%;height:260px;border:1px solid #ddd';
+  document.getElementById('read-body').append(iframe, pre);
+  document.getElementById('result').textContent = 'PASS — 7 reader checks. Select text, copy/paste below, and open the AWS link.';
+}).catch(error => { document.getElementById('result').textContent = 'FAIL — ' + error.message; });
+</script>

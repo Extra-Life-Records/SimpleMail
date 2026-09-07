@@ -257,12 +257,14 @@ async function openMessage(uid, el) {
     }
     if (msg.html) {
       const iframe = document.createElement("iframe");
-      iframe.sandbox = ""; // no scripts, no same-origin
+      // Links may open externally; email scripts and parent access stay blocked.
+      iframe.sandbox = "allow-popups allow-popups-to-escape-sandbox";
+      iframe.title = "Email message";
       iframe.srcdoc = sanitizeHtml(msg.html);
       $("read-body").appendChild(iframe);
     } else {
       const pre = document.createElement("pre");
-      pre.textContent = msg.text || "(no content)";
+      appendLinkedText(pre, msg.text || "(no content)");
       $("read-body").appendChild(pre);
     }
     // mark row as read locally; backend already marked it seen
@@ -842,12 +844,52 @@ async function doUpdate() {
 /* ---------------- sanitize (keep it light - sandbox iframe does the heavy lifting) ---------------- */
 
 function sanitizeHtml(html) {
-  // Strip <script>/<style> and event handlers as defense-in-depth.
-  let s = html;
-  s = s.replace(/<script[\s\S]*?<\/script>/gi, "");
-  s = s.replace(/<style[\s\S]*?<\/style>/gi, "");
-  s = s.replace(/\son\w+\s*=\s*("[^"]*"|'[^']*'|[^\s>]+)/gi, "");
-  return s;
+  const doc = new DOMParser().parseFromString(String(html), "text/html");
+  doc.querySelectorAll("script,style,iframe,frame,object,embed,base,meta,link,form").forEach((el) => el.remove());
+  doc.querySelectorAll("*").forEach((el) => {
+    for (const attr of Array.from(el.attributes)) {
+      if (/^on/i.test(attr.name) || ["srcdoc", "ping", "formaction", "action", "xlink:href"].includes(attr.name)) el.removeAttribute(attr.name);
+    }
+  });
+  doc.querySelectorAll("a,area").forEach((link) => {
+    const href = safeEmailLink(link.getAttribute("href"));
+    if (href) {
+      link.setAttribute("href", href);
+      link.setAttribute("target", "_blank");
+      link.setAttribute("rel", "noopener noreferrer");
+    } else {
+      link.removeAttribute("href");
+      link.removeAttribute("target");
+    }
+  });
+  const style = doc.createElement("style");
+  style.textContent = "html,body,body *{-webkit-user-select:text!important;user-select:text!important}body{overflow-wrap:anywhere}";
+  doc.head.appendChild(style);
+  return "<!doctype html>" + doc.documentElement.outerHTML;
+}
+
+function safeEmailLink(value) {
+  try {
+    const url = new URL(String(value || "").trim());
+    return ["https:", "http:", "mailto:"].includes(url.protocol) ? url.href : null;
+  } catch { return null; }
+}
+
+function appendLinkedText(container, text) {
+  const pattern = /https?:\/\/[^\s<>"']+/gi;
+  let end = 0;
+  for (const match of String(text).matchAll(pattern)) {
+    const value = match[0].replace(/[.,;!?)\]]+$/, "");
+    container.appendChild(document.createTextNode(text.slice(end, match.index)));
+    const link = document.createElement("a");
+    link.textContent = value;
+    link.href = safeEmailLink(value);
+    link.target = "_blank";
+    link.rel = "noopener noreferrer";
+    container.appendChild(link);
+    end = match.index + value.length;
+  }
+  container.appendChild(document.createTextNode(text.slice(end)));
 }
 
 function escapeHtml(s) {
