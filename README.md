@@ -14,6 +14,9 @@ HTML email rendering, a signature, and Sent/Drafts/Junk/Trash folders.
 - ✅ **Compose with signature** — set it once in Settings, auto-appended
 - ✅ **Save drafts**, delete messages, reply (Re: prefilled)
 - ✅ Unread counts, message snippets, modern three-pane layout
+- ✅ Click links in HTML and plain-text emails to open them in your browser
+- ✅ Mail refreshes every 30 seconds and when returning to the app, preserving
+  the open email, search and message-list scroll position
 - ✅ Credentials + signature stored locally in `%APPDATA%\SimpleMail`
 - ✅ Connection test button in Settings
 - ✅ Native ARM64 and x64 builds from the same codebase
@@ -89,7 +92,7 @@ Prints IMAP + SMTP connection results — handy for debugging.
 
 SimpleMail distributes itself through **GitHub releases**:
 
-- Repo: https://github.com/super-state/SimpleMail
+- Repo: https://github.com/Extra-Life-Records/SimpleMail
 - Each release carries two assets: `SimpleMail-x64.exe` (built automatically by
   GitHub Actions) and `SimpleMail-arm64.exe` (built on an ARM64 machine).
 - On launch, the app silently checks the latest release; if a newer version

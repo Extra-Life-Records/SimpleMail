@@ -53,7 +53,7 @@ else:
 
 APP_NAME = "SimpleMail"
 APP_VERSION = "1.2.0"
-APP_REPO = "super-state/SimpleMail"  # owner/repo for auto-updates
+APP_REPO = "Extra-Life-Records/SimpleMail"  # owner/repo for auto-updates
 CONFIG_DIR = Path(os.environ.get("APPDATA", str(Path.home()))) / APP_NAME
 CONFIG_FILE = CONFIG_DIR / "config.json"
 
@@ -1162,6 +1162,7 @@ class Api:
         try:
             envelopes = fetch_envelopes(imap, server_folder, int(self.cfg["max_messages"]))
             folder_unread = count_unread(imap, server_folder)
+            inbox_unread = folder_unread if server_folder.upper() == "INBOX" else count_unread(imap, "INBOX")
         finally:
             imap.logout()
         envelopes, moved = apply_rules(self.cfg, account_id, server_folder, envelopes)
@@ -1172,6 +1173,7 @@ class Api:
                 envelopes = fetch_envelopes(imap2, server_folder, int(self.cfg["max_messages"]))
                 envelopes, _ = apply_rules(self.cfg, account_id, server_folder, envelopes)
                 folder_unread = count_unread(imap2, server_folder)
+                inbox_unread = folder_unread if server_folder.upper() == "INBOX" else count_unread(imap2, "INBOX")
             finally:
                 imap2.logout()
         unread = sum(1 for e in envelopes if not e["seen"])
@@ -1179,6 +1181,7 @@ class Api:
             "envelopes": envelopes,
             "unread": unread,                  # unseen among the loaded page
             "folder_unread": folder_unread,    # whole folder, per the server
+            "inbox_unread": inbox_unread,
             "auto_moved": moved,
         }
 
@@ -1377,18 +1380,21 @@ class MailPoller(threading.Thread):
         super().__init__(daemon=True)
         self.acct = acct
         self._last_uid = None
-        self._stop = threading.Event()
+        self._stop_event = threading.Event()
 
     def stop(self):
-        self._stop.set()
+        self._stop_event.set()
 
     def run(self):
         # initial pass: just record where we are - don't notify for the
         # existing backlog
         self._snapshot_uid()
-        while not self._stop.wait(self.POLL_SECONDS):
+        while not self._stop_event.wait(self.POLL_SECONDS):
             try:
-                self._check_once()
+                if self._last_uid is None:
+                    self._snapshot_uid()
+                else:
+                    self._check_once()
             except Exception:
                 pass  # transient IMAP/network errors are fine
 
@@ -1398,8 +1404,8 @@ class MailPoller(threading.Thread):
             try:
                 imap.select("INBOX", readonly=True)
                 typ, data = imap.uid("search", None, "ALL")
-                if typ == "OK" and data and data[0]:
-                    self._last_uid = int(data[0].split()[-1])
+                if typ == "OK":
+                    self._last_uid = max((int(uid) for uid in (data[0] or b"").split()), default=0) if data else 0
             finally:
                 imap.logout()
         except Exception:
@@ -1414,13 +1420,17 @@ class MailPoller(threading.Thread):
             typ, data = imap.uid("search", None, f"UID {self._last_uid + 1}:*")
             if typ != "OK" or not data or not data[0]:
                 return
-            new_uids = [int(x) for x in data[0].split()]
+            # IMAP ranges are inclusive in either direction: n:* can return
+            # the previous maximum UID even when nothing new has arrived.
+            new_uids = [int(x) for x in data[0].split() if int(x) > self._last_uid]
             if not new_uids:
                 return
             uid_list = ",".join(str(u) for u in new_uids)
             typ, fdata = imap.uid(
                 "fetch", uid_list, "(BODY.PEEK[HEADER.FIELDS (FROM SUBJECT)] FLAGS)"
             )
+            if typ != "OK" or not fdata:
+                return
             seen_uids = set()
             for item in fdata:
                 if not isinstance(item, tuple):
@@ -1545,6 +1555,7 @@ def main():
     try:
         for attempt in (1, 2):
             try:
+                webview.settings["OPEN_EXTERNAL_LINKS_IN_BROWSER"] = True
                 window = webview.create_window(
                     f"SimpleMail v{APP_VERSION}",
                     url=url,
