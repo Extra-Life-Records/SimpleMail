@@ -17,6 +17,30 @@ function activeAccount() {
 
 const $ = (id) => document.getElementById(id);
 
+const MAIL_REFRESH_MS = 30000;
+let mailboxView = { requests: 0, loads: 0, actions: 0 };
+let messageReadRequest = 0;
+let refreshTimer = null;
+
+function resetMailboxView() {
+  mailboxView = { requests: 0, loads: 0, actions: 0 };
+  return mailboxView;
+}
+
+// Reading, moving and changing flags can invalidate a list fetched in parallel.
+async function mailAction(action) {
+  const view = mailboxView;
+  view.actions++;
+  view.requests++;
+  try { return await action(); }
+  finally { view.actions--; view.requests++; }
+}
+
+function startMailRefresh() {
+  clearInterval(refreshTimer);
+  refreshTimer = setInterval(() => loadMessages({ quiet: true }), MAIL_REFRESH_MS);
+}
+
 /* ---------------- helpers ---------------- */
 
 function toast(msg, isError = false) {
@@ -98,25 +122,31 @@ function renderAccounts() {
 
 async function selectAccount(accountId) {
   if (!state.accounts.some((a) => a.id === accountId)) return;
+  const view = resetMailboxView();
   state.activeAccountId = accountId;
+  state.folders = [];
+  state.currentFolder = "inbox";
   state.selectedUid = null;
   state.messages = [];
   renderAccounts();
+  renderFolders();
   $("msg-list").innerHTML = '<div class="empty">Loading…</div>';
   $("read-header").style.display = "none";
   $("read-body").innerHTML = '<div id="loading">Select a message</div>';
-  try { api.set_active_account(accountId); } catch {}
+  api.set_active_account(accountId).catch(() => {});
   try {
     const res = await api.get_folders(accountId);
+    if (view !== mailboxView) return;
     state.folders = res.folders;
     if (res.error) toast(res.error, true);
   } catch (e) {
+    if (view !== mailboxView) return;
     state.folders = [{ key: "inbox", name: "Inbox", server: "INBOX", unread: 0 }];
     toast(String(e), true);
   }
   state.currentFolder = "inbox";
   renderFolders();
-  selectFolder("inbox");
+  await selectFolder("inbox");
 }
 
 /* ---------------- folders ---------------- */
@@ -145,32 +175,50 @@ function renderFolders() {
 }
 
 function selectFolder(key) {
+  resetMailboxView();
   state.currentFolder = key;
   state.selectedUid = null;
+  state.messages = [];
   $("search-box").value = "";
   document.querySelectorAll(".folder").forEach((b) =>
     b.classList.toggle("active", b.dataset.key === key));
   const folder = state.folders.find((f) => f.key === key);
   $("folder-title").textContent = folder ? folder.name : key;
+  $("folder-count").textContent = "";
   $("msg-list").innerHTML = '<div class="empty">Loading…</div>';
   $("read-header").style.display = "none";
   $("read-body").innerHTML = '<div id="loading">Select a message</div>';
-  loadMessages();
+  return loadMessages();
 }
 
-async function loadMessages() {
+async function loadMessages({ quiet = false } = {}) {
   const folder = state.folders.find((f) => f.key === state.currentFolder);
+  if (!api || !state.activeAccountId || !folder) return;
+  const view = mailboxView;
+  if (quiet && (view.loads || view.actions)) return;
+  const request = ++view.requests;
+  view.loads++;
   try {
     const res = await api.list_messages(state.activeAccountId, folder.server);
+    if (view !== mailboxView || request !== view.requests) return;
+    const scrollTop = $("msg-list").scrollTop;
     state.messages = res.envelopes;
     renderMessages();
+    $("msg-list").scrollTop = scrollTop;
     // one source of truth: the server's whole-folder count. res.unread only
     // counts the loaded page, so it would undercount a busy folder.
     folder.unread = res.folder_unread == null ? res.unread : res.folder_unread;
+    const inbox = state.folders.find((f) => f.key === "inbox");
+    if (inbox && res.inbox_unread != null) inbox.unread = res.inbox_unread;
     updateUnreadCount();
   } catch (e) {
-    $("msg-list").innerHTML = '<div class="empty">Failed to load. Check settings.</div>';
+    if (view !== mailboxView || request !== view.requests || quiet) return;
+    if (!state.messages.length) {
+      $("msg-list").innerHTML = '<div class="empty">Failed to load. Check settings.</div>';
+    }
     toast(String(e), true);
+  } finally {
+    view.loads--;
   }
 }
 
@@ -215,6 +263,9 @@ function renderMessages() {
 /* ---------------- reading ---------------- */
 
 async function openMessage(uid, el) {
+  const view = mailboxView;
+  const request = ++messageReadRequest;
+  const accountId = state.activeAccountId;
   state.selectedUid = uid;
   document.querySelectorAll(".msg").forEach((m) =>
     m.classList.toggle("selected", m.dataset.uid === uid));
@@ -222,7 +273,8 @@ async function openMessage(uid, el) {
   $("read-body").innerHTML = '<div id="loading"><span class="spinner"></span> Loading…</div>';
   const folder = state.folders.find((f) => f.key === state.currentFolder);
   try {
-    const msg = await api.get_message(state.activeAccountId, folder.server, uid);
+    const msg = await mailAction(() => api.get_message(accountId, folder.server, uid));
+    if (view !== mailboxView || request !== messageReadRequest) return;
     $("read-header").style.display = "block";
     $("read-subject").textContent = msg.subject;
     $("read-meta").innerHTML =
@@ -243,7 +295,7 @@ async function openMessage(uid, el) {
           btn.disabled = true;
           btn.textContent = "…";
           try {
-            const res = await api.save_attachment(state.activeAccountId, folder.server, uid, btn.dataset.idx);
+            const res = await api.save_attachment(accountId, folder.server, uid, btn.dataset.idx);
             toast("Saved to " + res.path);
           } catch (e) {
             toast("Save failed: " + e, true);
@@ -274,6 +326,7 @@ async function openMessage(uid, el) {
     if (idx >= 0) state.messages[idx].seen = true;
     updateUnreadCount(wasUnread ? -1 : 0);
   } catch (e) {
+    if (view !== mailboxView || request !== messageReadRequest) return;
     $("read-body").innerHTML = '<div class="empty">Failed to open message.</div>';
     toast(String(e), true);
   }
@@ -564,8 +617,16 @@ async function reloadAccounts() {
   state.accounts = data.accounts || [];
   applyScale(data.ui_scale || "default");
   if (!state.accounts.length) {
+    resetMailboxView();
     state.activeAccountId = null;
+    state.folders = [];
+    state.messages = [];
+    state.selectedUid = null;
     renderAccounts();
+    renderFolders();
+    renderMessages();
+    $("read-header").style.display = "none";
+    $("read-body").innerHTML = '<div id="loading">Select a message</div>';
     return;
   }
   const wanted = state.accounts.some((a) => a.id === state.activeAccountId)
@@ -597,6 +658,11 @@ async function init() {
   $("unread-btn").addEventListener("click", markUnread);
   $("markall-btn").addEventListener("click", markAllRead);
   $("refresh-btn").addEventListener("click", () => loadMessages());
+  window.addEventListener("focus", () => loadMessages({ quiet: true }));
+  document.addEventListener("visibilitychange", () => {
+    if (!document.hidden) loadMessages({ quiet: true });
+  });
+  startMailRefresh();
   $("sig-image-btn").addEventListener("click", addSigImage);
   $("search-box").addEventListener("input", () => renderMessages());
   $("upd-now").addEventListener("click", doUpdate);
@@ -637,8 +703,10 @@ async function init() {
 async function markAllRead() {
   const folder = state.folders.find((f) => f.key === state.currentFolder);
   if (!folder) return;
+  const view = mailboxView;
   try {
-    const res = await api.mark_all_read(state.activeAccountId, folder.server);
+    const res = await mailAction(() => api.mark_all_read(state.activeAccountId, folder.server));
+    if (view !== mailboxView) return;
     toast(`Marked ${res.count} message${res.count === 1 ? "" : "s"} as read`);
     await loadMessages();
   } catch (e) {
@@ -649,9 +717,12 @@ async function markAllRead() {
 async function markUnread() {
   if (!state.selectedUid) return;
   const folder = state.folders.find((f) => f.key === state.currentFolder);
+  const view = mailboxView;
+  const uid = state.selectedUid;
   try {
-    await api.set_seen(state.activeAccountId, folder.server, state.selectedUid, false);
-    const idx = state.messages.findIndex((m) => m.uid === state.selectedUid);
+    await mailAction(() => api.set_seen(state.activeAccountId, folder.server, uid, false));
+    if (view !== mailboxView) return;
+    const idx = state.messages.findIndex((m) => m.uid === uid);
     const wasRead = idx >= 0 && state.messages[idx].seen;
     if (idx >= 0) state.messages[idx].seen = false;
     renderMessages();
@@ -666,13 +737,19 @@ async function deleteSelected() {
   if (!state.selectedUid) return;
   if (!confirm("Delete this message?")) return;
   const folder = state.folders.find((f) => f.key === state.currentFolder);
+  const view = mailboxView;
+  const uid = state.selectedUid;
   try {
-    const gone = state.messages.find((m) => m.uid === state.selectedUid);
-    await api.delete_message(state.activeAccountId, folder.server, state.selectedUid);
-    state.messages = state.messages.filter((m) => m.uid !== state.selectedUid);
-    state.selectedUid = null;
-    $("read-header").style.display = "none";
-    $("read-body").innerHTML = '<div id="loading">Select a message</div>';
+    const gone = state.messages.find((m) => m.uid === uid);
+    await mailAction(() => api.delete_message(state.activeAccountId, folder.server, uid));
+    if (view !== mailboxView) return;
+    state.messages = state.messages.filter((m) => m.uid !== uid);
+    if (state.selectedUid === uid) {
+      state.selectedUid = null;
+      messageReadRequest++;
+      $("read-header").style.display = "none";
+      $("read-body").innerHTML = '<div id="loading">Select a message</div>';
+    }
     renderMessages();
     updateUnreadCount(gone && !gone.seen ? -1 : 0);
     toast("Deleted");
@@ -762,11 +839,15 @@ async function ctxMoveTo(target) {
   const msg = state.messages.find((m) => m.uid === ctxUid);
   const folder = state.folders.find((f) => f.key === state.currentFolder);
   if (!msg || !folder) return;
+  const view = mailboxView;
+  const uid = ctxUid;
   try {
-    const res = await api.move_message(state.activeAccountId, folder.server, ctxUid, target, msg.sender, true);
-    state.messages = state.messages.filter((m) => m.uid !== ctxUid);
-    if (state.selectedUid === ctxUid) {
+    const res = await mailAction(() => api.move_message(state.activeAccountId, folder.server, uid, target, msg.sender, true));
+    if (view !== mailboxView) return;
+    state.messages = state.messages.filter((m) => m.uid !== uid);
+    if (state.selectedUid === uid) {
       state.selectedUid = null;
+      messageReadRequest++;
       $("read-header").style.display = "none";
       $("read-body").innerHTML = '<div id="loading">Select a message</div>';
     }
@@ -870,7 +951,8 @@ function sanitizeHtml(html) {
 
 function safeEmailLink(value) {
   try {
-    const url = new URL(String(value || "").trim());
+    const raw = String(value || "").trim();
+    const url = new URL(raw.startsWith("//") ? "https:" + raw : raw);
     return ["https:", "http:", "mailto:"].includes(url.protocol) ? url.href : null;
   } catch { return null; }
 }
@@ -942,8 +1024,11 @@ function setupDivider() {
 function boot() {
   // pywebview injects window.pywebview AFTER DOMContentLoaded and fires
   // 'pywebviewready'. Wait for it (with a poll fallback), then start.
+  let started = false;
   const start = () => {
+    if (started) return true;
     if (window.pywebview && window.pywebview.api) {
+      started = true;
       api = window.pywebview.api;
       init();
       return true;
