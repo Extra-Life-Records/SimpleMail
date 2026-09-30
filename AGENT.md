@@ -1,9 +1,19 @@
 # Connect an AI to a SimpleMail mailbox
 
-The v1.3.1 desktop and console agent are published for Windows x64 and ARM64.
+The v1.4.0 desktop and console agent are published for Windows x64 and ARM64.
 The released x64 files are installed and checked on the owner's machine.
 Use an MCP client that supports local stdio servers. No model provider is required
 by SimpleMail itself: the connected client supplies the model.
+
+For a built-in background worker, open **Agent → Job → Connect a model**. Enter
+the provider endpoint, model ID and API format, then the key if needed. Save the
+connection, save your job and enable access, then choose **Start agent**. A localhost
+model can run without a key. Windows DPAPI protects saved keys for your Windows
+user; keys never return to the frontend or appear in worker command lines.
+Changing providers requires a new key. Pause agent revokes mailbox access and
+requests worker shutdown. Wait for Stopped before changing its connection.
+The worker continues while the desktop is closed, but does not start at Windows
+login. Its first scan ignores existing Inbox mail and watches for new arrivals.
 
 ## Assign a job
 
