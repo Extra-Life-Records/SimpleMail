@@ -30,7 +30,8 @@ class LiveConfig:
         raw = data.get("accounts", [])
         if not raw and data.get("email"):
             raw = [{key: data[key] for key in _LEGACY_KEYS if key in data}]
-        accounts = [normalize_account(item) for item in raw]
+        from mail_credentials import unlock_account
+        accounts = [unlock_account(normalize_account(item)) for item in raw]
         ids = [item["id"] for item in accounts]
         if len(set(ids)) != len(ids):
             raise ValueError("Duplicate mailbox IDs; ask the owner to fix Settings")

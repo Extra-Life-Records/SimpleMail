@@ -27,6 +27,7 @@ from email.policy import default as email_policy
 from pathlib import Path
 import html as html_lib
 from html.parser import HTMLParser
+from mail_credentials import unlock_account, write_config
 
 # ---------------------------------------------------------------------------
 # pythonnet / pywebview environment (must be set BEFORE importing webview)
@@ -52,7 +53,7 @@ else:
     _WEBVIEW_IMPORT_ERROR = None
 
 APP_NAME = "SimpleMail"
-APP_VERSION = "1.5.1"
+APP_VERSION = "1.5.2"
 APP_REPO = "Extra-Life-Records/SimpleMail"  # owner/repo for auto-updates
 CONFIG_DIR = Path(os.environ.get("APPDATA", str(Path.home()))) / APP_NAME
 CONFIG_FILE = CONFIG_DIR / "config.json"
@@ -89,7 +90,7 @@ ACCOUNT_DEFAULTS = {
 
 # Legacy (v1.0.x) single-account keys, migrated into accounts[0] on first load.
 _LEGACY_KEYS = ("email", "password", "signature", "imap_host", "imap_port",
-                "smtp_host", "smtp_port", "smtp_starttls", "rules")
+                "smtp_host", "smtp_port", "smtp_starttls", "smtp_user", "smtp_password", "from_email", "rules")
 
 
 def _slugify(s):
@@ -127,7 +128,11 @@ class Config:
         except (OSError, ValueError):
             pass
         self._migrate_legacy()
-        self.data["accounts"] = [normalize_account(a) for a in self.data.get("accounts", [])]
+        raw_accounts = self.data.get("accounts", [])
+        self.data["accounts"] = [unlock_account(normalize_account(a)) for a in raw_accounts]
+        if any(isinstance(a.get(field), str) and a.get(field)
+               for a in raw_accounts for field in ("password", "smtp_password")):
+            self.save()
 
     def _migrate_legacy(self):
         """v1.0.x kept a single account's fields at the top level."""
@@ -149,9 +154,7 @@ class Config:
             pass  # migration re-runs next boot; nothing is lost
 
     def save(self):
-        CONFIG_DIR.mkdir(parents=True, exist_ok=True)
-        with open(CONFIG_FILE, "w", encoding="utf-8") as fh:
-            json.dump(self.data, fh, indent=2)
+        write_config(CONFIG_FILE, self.data)
 
     # -- accounts ----------------------------------------------------------
     def accounts(self):
@@ -1098,7 +1101,11 @@ class Api:
                 "label": acct["label"],
                 "color": acct.get("color") or "#2563eb",
                 "email": acct["email"],
-                "password": acct["password"],
+                "password": "",
+                "has_password": bool(acct["password"] or "password" in acct.get("_locked_credentials", {})),
+                "credential_error": bool(acct.get("_locked_credentials")),
+                "password_error": "password" in acct.get("_locked_credentials", {}),
+                "smtp_password_error": "smtp_password" in acct.get("_locked_credentials", {}),
                 "from_email": acct.get("from_email", ""),
                 "identity": from_address(acct),
                 "imap_host": acct["imap_host"],
@@ -1107,7 +1114,8 @@ class Api:
                 "smtp_port": acct["smtp_port"],
                 "smtp_starttls": acct["smtp_starttls"],
                 "smtp_user": acct.get("smtp_user", ""),
-                "smtp_password": acct.get("smtp_password", ""),
+                "smtp_password": "",
+                "has_smtp_password": bool(acct.get("smtp_password") or "smtp_password" in acct.get("_locked_credentials", {})),
                 "signature": acct.get("signature", ""),
                 "rules": acct.get("rules", {}),
             })
@@ -1161,25 +1169,59 @@ class Api:
             while acct["id"] in seen_ids:  # keep ids unique
                 acct["id"] += "-2"
             seen_ids.add(acct["id"])
+            acct = self._retain_credentials(acct, raw)
             if "rules" not in raw or not raw.get("rules"):
                 acct["rules"] = existing_rules.get(acct["id"], {})
             accounts.append(acct)
-        self.cfg["accounts"] = accounts
         active = data.get("active_account", "")
         if not any(a["id"] == active for a in accounts):
             active = accounts[0]["id"] if accounts else ""
-        self.cfg["active_account"] = active
+        updated = dict(self.cfg.data)
+        updated["accounts"] = accounts
+        updated["active_account"] = active
         if data.get("ui_scale") in ("compact", "default", "large"):
-            self.cfg["ui_scale"] = data["ui_scale"]
-        self.cfg.save()
+            updated["ui_scale"] = data["ui_scale"]
+        previous = self.cfg.data
+        self.cfg.data = updated
+        try:
+            self.cfg.save()
+        except Exception:
+            self.cfg.data = previous
+            raise
         return {"ok": True, "accounts": [a["id"] for a in accounts], "active_account": active}
 
     def test_connection(self, data):
         self._log("CALL test_connection")
-        acct = normalize_account(data or {})
+        acct = self._retain_credentials(normalize_account(data or {}), data or {})
         results = check_connection(acct)
         ok = all(r[0] for r in results)
         return {"ok": ok, "error": None if ok else "; ".join(l for okk, l in results if not okk)}
+
+    def _retain_credentials(self, acct, raw):
+        for field in ("password", "smtp_password"):
+            if not isinstance(acct[field], str) or not isinstance(raw.get("clear_" + field, False), bool):
+                raise ValueError("Invalid password input")
+        try:
+            stored = self.cfg.account(acct["id"])
+        except KeyError:
+            return acct
+        locked = {}
+        for field, connection in (("password", ("email", "imap_host", "imap_port")),
+                                  ("smtp_password", ("smtp_host", "smtp_port", "smtp_user"))):
+            if raw.get("clear_" + field):
+                acct[field] = ""
+                continue
+            if acct[field]:
+                continue
+            if any(acct.get(key) != stored.get(key) for key in connection) and (
+                    stored.get(field) or field in stored.get("_locked_credentials", {})):
+                raise ValueError("Enter a new password after changing the mailbox or server")
+            acct[field] = stored.get(field, "")
+            if field in stored.get("_locked_credentials", {}):
+                locked[field] = stored["_locked_credentials"][field]
+        if locked:
+            acct["_locked_credentials"] = locked
+        return acct
 
     def list_messages(self, account_id, server_folder):
         self._log(f"CALL list_messages {account_id} {server_folder}")

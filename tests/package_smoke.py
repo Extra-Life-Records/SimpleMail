@@ -26,10 +26,11 @@ with tempfile.TemporaryDirectory(prefix='simplemail-installed-agent-') as root:
     env = {**os.environ, 'APPDATA': root}
     config_dir = Path(root) / 'SimpleMail'
     config_dir.mkdir()
-    (config_dir / 'config.json').write_text(json.dumps({'accounts': [
-        {'id': 'fixture', 'label': 'Packaged QA', 'email': 'qa@example.invalid', 'password': '',
+    from mail_credentials import write_config
+    write_config(config_dir / 'config.json', {'accounts': [
+        {'id': 'fixture', 'label': 'Packaged QA', 'email': 'qa@example.invalid', 'password': 'fixture-password',
          'imap_host': '127.0.0.1', 'imap_port': 1, 'smtp_host': '127.0.0.1', 'smtp_port': 1}],
-        'active_account': 'fixture'}), encoding='utf-8')
+        'active_account': 'fixture'})
     def command(*args, input=None):
         result = subprocess.run([str(exe), *args], input=input, capture_output=True,
                                 text=True, encoding='utf-8', env=env, timeout=45)

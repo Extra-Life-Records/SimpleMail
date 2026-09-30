@@ -258,3 +258,10 @@ node --test tests/test_mail_refresh.js
 Tests use temporary config/state, local HTTP provider fixtures and fake mail
 connections; no real messages are sent. Remaining stages are tracked in PLAN.md.
 Protocol reference: https://modelcontextprotocol.io/specification/2025-06-18
+
+Mailbox passwords in v1.5.2 are encrypted for the current Windows user. Existing
+configs migrate when the desktop starts; the console agent can read encrypted
+configs. Keep both executables current. Saved passwords are not returned to the
+settings screen; leave blank to keep one or enter a replacement. In advanced
+SMTP settings, Use mailbox password instead removes a separate SMTP password.
+Protected credentials cannot be moved to another Windows user as plaintext.
