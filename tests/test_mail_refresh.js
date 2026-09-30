@@ -49,6 +49,34 @@ function app() {
 const mail = (uid, seen = false) => ({ uid, subject: `Message ${uid}`, seen });
 const response = (envelopes, count = 2) => ({ envelopes, folder_unread: count, inbox_unread: count });
 
+test('reply quotes escape incoming HTML outside the reader sandbox', async () => {
+  const a = app();
+  a.api.get_message = async () => ({html:'<img src=x onerror="window.pywebview.api.send_mail()">',
+    text:'<img src=x onerror="steal()">', date:'Today', sender:'Customer'});
+  const quote = await a.run("quoteOriginal({uid:'1'})");
+  assert(!quote.includes('<img'));
+  assert(quote.includes('&lt;img'));
+});
+
+test('local drafts remain visible when the IMAP Drafts folder is offline', async () => {
+  const a = app();
+  a.run("state.currentFolder='drafts'; state.folders=[{key:'drafts',server:'Drafts',name:'Drafts'}]");
+  a.api.list_messages = async () => { throw Error('IMAP unavailable'); };
+  a.api.list_compose_drafts = async () => [{id:'local-1',status:'pending',updated_at:'2026-09-30T12:00:00Z',
+    payload:{to:'person@example.com',subject:'Recover me',body:'Saved work'}}];
+  await a.run('loadMessages()');
+  assert.equal(a.run("state.messages[0].localDraftId"),'local-1');
+  assert.equal(a.run("$('msg-list').innerHTML"),'Recover me');
+});
+
+test('a local-only Drafts folder never marks Inbox read', async () => {
+  const a = app();
+  a.run("state.currentFolder='drafts'; state.folders=[{key:'drafts',server:null,name:'Drafts'}]");
+  let calls=0; a.api.mark_all_read=async()=>{calls++;};
+  await a.run('markAllRead()');
+  assert.equal(calls,0);
+});
+
 test('new mail refresh preserves reader, selection, search and list scroll', async () => {
   const a = app();
   a.api.list_messages = async () => response([mail('2'), mail('1', true)], 7);

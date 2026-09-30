@@ -9,10 +9,21 @@ HTML email rendering, a signature, and Sent/Drafts/Junk/Trash folders.
 
 ## Features
 
+The local v1.3.0 build includes a scoped MCP connection, persistent drafts for
+review, and a small Agent panel. See [connection instructions](AGENT.md) and the
+[implementation plan](PLAN.md). This build has been installed and checked on the
+owner's x64 machine; it has not been published as a GitHub release.
+
 - ✅ **Inbox, Sent, Drafts, Junk, Trash** — one click in the sidebar
 - ✅ **Real HTML email rendering** (sandboxed iframe, scripts stripped)
 - ✅ **Compose with signature** — set it once in Settings, auto-appended
-- ✅ **Save drafts**, delete messages, reply (Re: prefilled)
+- ✅ **Automatic local draft saving and recovery**; keep or discard
+  drafts and resume them from Drafts after restarting. New human drafts are saved
+  on this device; existing server drafts remain visible.
+- ✅ Reply, Reply All, forwarding with files, CC/BCC and outgoing attachments.
+  Attachments survive local draft recovery; replies honour Reply-To and
+  preserve conversation headers.
+- ✅ Delete messages
 - ✅ Unread counts, message snippets, modern three-pane layout
 - ✅ Click links in HTML and plain-text emails to open them in your browser
 - ✅ Mail refreshes every 30 seconds and when returning to the app, preserving

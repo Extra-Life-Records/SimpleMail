@@ -32,8 +32,17 @@ if %errorlevel% neq 0 (
     --add-data "runtimeconfig.json;." ^
     --hidden-import webview.platforms.winforms ^
     mailapp.py
+if errorlevel 1 exit /b 1
+
+rem Separate console entry point: MCP requires real stdin/stdout.
+%PY% -m PyInstaller --noconfirm --onefile --console ^
+    --name SimpleMailAgent ^
+    --add-data "runtimeconfig.json;." ^
+    --hidden-import webview.platforms.winforms ^
+    agent_mcp.py
+if errorlevel 1 exit /b 1
 
 echo.
-echo Build complete. The .exe is in the "dist" folder.
+echo Build complete. SimpleMail.exe and SimpleMailAgent.exe are in the "dist" folder.
 echo Note: build on x64 for x64 machines, build on ARM64 for ARM64 machines.
 pause
