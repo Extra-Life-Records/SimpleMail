@@ -82,5 +82,8 @@ jobs:
           RELEASE_TAG: ${{ github.ref_name }}
         run: |
           gh release create "$RELEASE_TAG" --draft --title "$RELEASE_TAG" --generate-notes
-          gh release upload "$RELEASE_TAG" release/*.exe
+          # Older installed clients choose the first architecture match.
+          # Keep desktop assets ahead of the console downloads for those clients.
+          gh release upload "$RELEASE_TAG" release/SimpleMail-*.exe
+          gh release upload "$RELEASE_TAG" release/SimpleMailAgent-*.exe
           gh release edit "$RELEASE_TAG" --draft=false --latest
