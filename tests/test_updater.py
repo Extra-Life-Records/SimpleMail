@@ -313,6 +313,14 @@ try:
     check("T4: x64 picks the x64 asset", info and info["asset_name"] == "SimpleMail-x64.exe",
           str(info and info["asset_name"]))
 
+    agent_assets = [{"name": f"SimpleMailAgent-{arch}.exe", "browser_download_url": "https://example.invalid/agent"}
+                    for arch in ("x64", "arm64")]
+    urllib.request.urlopen = fake_urlopen({**RELEASE_JSON, "assets": agent_assets + RELEASE_JSON["assets"]})
+    for arch in ("x64", "arm64"):
+        m.current_arch = lambda arch=arch: arch
+        info = m.check_for_update()
+        check(f"T4: {arch} never selects the console agent", info["asset_name"] == f"SimpleMail-{arch}.exe")
+
     urllib.request.urlopen = fake_urlopen({**RELEASE_JSON, "assets": [RELEASE_JSON["assets"][0]]})
     m.current_arch = lambda: "arm64"
     info = m.check_for_update()

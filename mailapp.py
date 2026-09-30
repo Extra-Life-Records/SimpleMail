@@ -52,7 +52,7 @@ else:
     _WEBVIEW_IMPORT_ERROR = None
 
 APP_NAME = "SimpleMail"
-APP_VERSION = "1.3.0"
+APP_VERSION = "1.3.1"
 APP_REPO = "Extra-Life-Records/SimpleMail"  # owner/repo for auto-updates
 CONFIG_DIR = Path(os.environ.get("APPDATA", str(Path.home()))) / APP_NAME
 CONFIG_FILE = CONFIG_DIR / "config.json"
@@ -861,6 +861,9 @@ def check_for_update(timeout=15):
     asset = None
     for a in data.get("assets", []):
         name = (a.get("name") or "").lower()
+        # The console agent shares the release but is never a desktop update.
+        if not name.startswith("simplemail-") or not name.endswith(".exe"):
+            continue
         if arch == "arm64" and "arm64" in name:
             asset = a
             break
