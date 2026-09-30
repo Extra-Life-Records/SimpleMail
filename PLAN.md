@@ -278,4 +278,12 @@ Review decisions require the displayed item's exact updated timestamp. Existing
 drafts/delivery outcomes block retry, and pending drafts must be sent or dismissed
 before resolution. Reviews stay accessible while paused; missing/moved messages
 remain resolvable. Activity displays readable work outcomes and reasons.
-Focused worker/queue and rendered review checks passed. Release/install pending.
+All 129 Python tests and 21 frontend tests passed. PR #20 is merged; native x64
+and ARM64 package jobs passed and v1.4.1 is published with all four downloads.
+Downloaded files match GitHub's published SHA256 digests and native PE machines.
+The released x64 desktop and console are installed. The console passed its
+protocol and managed start/pause smoke check. Actual installed WebView2 verified
+paused owner reads, account isolation, readable Activity and unchanged job settings,
+with no runtime errors. The earlier live repair proof remains scoped to one
+newsletter. The original plan's navigation, conversation memory, recoverable filing,
+and mail-credential/image protection remain unfinished.

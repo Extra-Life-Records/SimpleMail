@@ -1,6 +1,6 @@
 # Connect an AI to a SimpleMail mailbox
 
-The v1.4.0 desktop and console agent are published for Windows x64 and ARM64.
+The v1.4.1 desktop and console agent are published for Windows x64 and ARM64.
 The released x64 files are installed and checked on the owner's machine.
 Use an MCP client that supports local stdio servers. No model provider is required
 by SimpleMail itself: the connected client supplies the model.
@@ -14,6 +14,13 @@ Changing providers requires a new key. Pause agent revokes mailbox access and
 requests worker shutdown. Wait for Stopped before changing its connection.
 The worker continues while the desktop is closed, but does not start at Windows
 login. Its first scan ignores existing Inbox mail and watches for new arrivals.
+
+**Needs you** includes drafts and messages that need facts, a decision or recovery.
+Review the message while paused, then mark it handled or ask the AI to try again.
+Another attempt does not enable a paused agent. Existing drafts or delivery outcomes
+block repeat processing; send or dismiss pending drafts before resolving their work.
+**Activity** records readable outcomes and reasons. Prose-only model output gets a
+bounded completion-only recovery step; repeated prose remains an owner review item.
 
 ## Assign a job
 
