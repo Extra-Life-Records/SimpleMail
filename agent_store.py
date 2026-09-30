@@ -4,6 +4,7 @@ import json
 import sqlite3
 import uuid
 import re
+import conversation_state
 from email.utils import getaddresses
 from datetime import datetime, timezone
 from contextlib import contextmanager
@@ -19,6 +20,7 @@ class AgentStore:
         self.path = Path(path)
         self.path.parent.mkdir(parents=True, exist_ok=True)
         with self.connect() as db:
+            conversation_state.initialize(db)
             db.executescript("""
                 CREATE TABLE IF NOT EXISTS profiles (
                     account_id TEXT PRIMARY KEY, enabled INTEGER NOT NULL DEFAULT 0,
@@ -160,6 +162,7 @@ class AgentStore:
             if changed != 1:
                 raise ValueError("Draft changed or is no longer pending")
             self._event(db, account_id, "draft_dismissed", {"draft_id": draft_id})
+            conversation_state.draft_outcome(db, account_id, draft_id, "dismissed")
         return {"status": "dismissed"}
 
     def claim_send(self, account_id, draft_id, revision, autonomous=False):
@@ -204,6 +207,7 @@ class AgentStore:
             if changed != 1:
                 raise ValueError("Send was not claimed")
             self._event(db, account_id, "send_" + outcome, {"draft_id": draft_id, **detail})
+            conversation_state.draft_outcome(db, account_id, draft_id, outcome)
 
     def activity(self, account_id, before=None, limit=50):
         limit = max(1, min(int(limit), 100))

@@ -335,3 +335,25 @@ Unavailable ciphertext survives ordinary settings saves and can be replaced.
 
 Ten credential tests and rendered settings checks cover these cases. Release
 and installed migration verification remain pending at this source checkpoint.
+
+### Conversation state (v1.6.0 source)
+
+v1.5.2 credential protection is released and installed. Three real stored secrets
+were verified encrypted, unchanged after migration, and unlocked by the agent
+config reader. Native saved-credential IMAP/SMTP login checks passed without
+sending mail. Owner settings and the agent's paused state remained intact.
+
+Conversation outcomes/notes now persist in the shared SQLite database and carry
+forward to later replies through Message-ID/References/In-Reply-To links. Subject
+matches never link conversations. Missing headers keep messages separate;
+conflicting known links escalate for owner review. Account isolation, monotonic
+work ordering and idempotent completion protect newer notes from older workers.
+Existing work is backfilled once. Draft sending/dismissal, uncertain delivery,
+owner resolution, expired claims and changed Inbox identities update state.
+
+The model receives previous notes as explicitly untrusted task context, separate
+from owner instructions/grants. External MCP consumers can read conversation
+state and record new notes through their claimed work's completion. Owner review
+shows escaped notes in a collapsed detail. Ten new state tests plus a model-wire
+continuation test and rendered owner-review checks cover the feature. Release and
+installed checks remain pending at this source checkpoint.

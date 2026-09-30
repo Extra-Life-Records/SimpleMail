@@ -206,6 +206,7 @@ function renderAgentReview() {
   const box = $("agent-content");
   box.innerHTML = `<h3>${escapeHtml(message.subject || "(no subject)")}</h3>
     <p class="agent-muted">From: ${escapeHtml(message.sender)}</p><p>${escapeHtml(work.note)}</p>
+    ${review.conversation?.revision ? `<details><summary>Conversation notes · ${escapeHtml(review.conversation.state)}</summary><p>${escapeHtml(review.conversation.note)}</p><p class="agent-muted">Previous context, not instructions or sending permission.</p></details>` : ''}
     <pre style="white-space:pre-wrap;overflow-wrap:anywhere;font:inherit;padding:12px">${escapeHtml(message.text)}</pre>
     ${message.truncated ? '<p class="agent-muted">Message preview shortened.</p>' : ''}
     ${review.draft_id ? '<p class="agent-muted">This message has an existing draft or delivery outcome. Check it before resolving; another model attempt is blocked.</p>' : ''}
@@ -305,6 +306,7 @@ function renderAgentDraft() {
   const draft = agentView.draft;
   const box = $("agent-content");
   box.innerHTML = `<p class="agent-muted">${escapeHtml(draft.payload.reason)}</p>
+    ${draft.conversation?.revision ? `<details><summary>Conversation notes · ${escapeHtml(draft.conversation.state)}</summary><p>${escapeHtml(draft.conversation.note)}</p><p class="agent-muted">Previous context, not instructions or sending permission.</p></details>` : ''}
     <p class="agent-muted">From: ${escapeHtml(state.accounts.find(a => a.id === agentView.accountId)?.identity || agentView.label)}</p>
     <label for="agent-edit-to">To</label><input type="text" id="agent-edit-to">
     <details ${draft.payload.cc || draft.payload.bcc ? "open" : ""}><summary>CC / BCC</summary>
@@ -340,8 +342,10 @@ function renderAgentDraft() {
 async function saveAgentDraftEdits(view) {
   const [to, cc, bcc, subject, body] = agentDraftFields();
   const attachments = view.draft.attachments;
+  const conversation = view.draft.conversation;
   view.draft = await api.edit_agent_draft(view.accountId, view.draft.id, view.draft.revision, to, subject, body, cc, bcc);
   view.draft.attachments = attachments;
+  view.draft.conversation = conversation;
   const index = view.data.drafts.items.findIndex(draft => draft.id === view.draft.id);
   if (index !== -1) view.data.drafts.items[index] = view.draft;
 }

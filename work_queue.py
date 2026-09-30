@@ -8,6 +8,7 @@ from email.utils import getaddresses
 import re
 
 from agent_store import AgentStore, now
+import conversation_state
 
 
 class WorkQueue(AgentStore):
@@ -27,6 +28,23 @@ class WorkQueue(AgentStore):
                     UNIQUE(account_id, message_ref));
                 CREATE INDEX IF NOT EXISTS work_ready ON mail_work(account_id,status,available_at,id);
             """)
+            db.execute("BEGIN IMMEDIATE")
+            for row in db.execute("SELECT w.* FROM mail_work w LEFT JOIN conversation_messages m "
+                                  "ON m.account_id=w.account_id AND m.message_ref=w.message_ref "
+                                  "WHERE m.message_ref IS NULL ORDER BY w.id").fetchall():
+                conversation_state.bind(db, row['account_id'], row['message_ref'], json.loads(row['headers']))
+                conversation_state.complete(db, row['account_id'], row['message_ref'], row['id'], row['status'], row['note'])
+                draft = db.execute('SELECT id,status FROM drafts WHERE account_id=? AND request_key=?',
+                                   (row['account_id'], f"work-{row['id']}")).fetchone()
+                if draft and draft['status'] in ('sent', 'uncertain', 'dismissed'):
+                    conversation_state.draft_outcome(db, row['account_id'], draft['id'], draft['status'])
+
+    def conversation(self, account, message_ref, headers=None):
+        with self.connect() as db:
+            if headers is not None:
+                db.execute('BEGIN IMMEDIATE')
+                conversation_state.bind(db, account, message_ref, headers)
+            return conversation_state.read(db, account, message_ref)
 
     @staticmethod
     def enabled(db, account):
@@ -50,17 +68,27 @@ class WorkQueue(AgentStore):
             if (tuple(row) if row else None) != expected:
                 return {"queued": 0, "superseded": True}
             if expected and expected[0] != validity:
-                db.execute("UPDATE mail_work SET status='needs_owner',lease_token=NULL,lease_until=NULL,"
+                changed = db.execute("UPDATE mail_work SET status='needs_owner',lease_token=NULL,lease_until=NULL,"
                            "note='Inbox identity changed; search again before acting',updated_at=? "
-                           "WHERE account_id=? AND status IN ('pending','leased','retry')", (now(), account))
+                           "WHERE account_id=? AND status IN ('pending','leased','retry') RETURNING id,message_ref,note", (now(), account)).fetchall()
+                for item in changed:
+                    conversation_state.complete(db, account, item['message_ref'], item['id'], 'needs_owner', item['note'])
                 self._event(db, account, "inbox_recreated", {})
             inserted = 0
             for item in items:
+                _, ambiguous = conversation_state.bind(db, account, item['message_ref'], item['headers'])
+                if ambiguous:
+                    item = {**item, 'status': 'needs_owner', 'note': 'Conflicting conversation headers; owner review required'}
                 stamp = now()
-                inserted += db.execute(
+                added = db.execute(
                     "INSERT OR IGNORE INTO mail_work(account_id,message_ref,headers,status,note,created_at,updated_at) "
                     "VALUES(?,?,?,?,?,?,?)", (account, item["message_ref"], json.dumps(item["headers"]),
                                               item["status"], item["note"], stamp, stamp)).rowcount
+                inserted += added
+                if added and item['status'] == 'needs_owner':
+                    row = db.execute('SELECT id FROM mail_work WHERE account_id=? AND message_ref=?',
+                                     (account, item['message_ref'])).fetchone()
+                    conversation_state.complete(db, account, item['message_ref'], row['id'], item['status'], item['note'])
             db.execute("INSERT INTO sync_checkpoints VALUES(?,?,?) ON CONFLICT(account_id) "
                        "DO UPDATE SET validity=excluded.validity,last_uid=excluded.last_uid",
                        (account, validity, last_uid))
@@ -82,10 +110,12 @@ class WorkQueue(AgentStore):
             db.execute("BEGIN IMMEDIATE")
             self.enabled(db, account)
             # A crashed consumer gets another attempt; repeated crashes eventually escalate.
-            db.execute("UPDATE mail_work SET status='needs_owner',lease_token=NULL,lease_until=NULL,"
+            changed = db.execute("UPDATE mail_work SET status='needs_owner',lease_token=NULL,lease_until=NULL,"
                        "note='Repeated processing failures; owner review required',updated_at=? "
-                       "WHERE account_id=? AND status='leased' AND lease_until<=? AND attempts>=5",
-                       (now(), account, stamp))
+                       "WHERE account_id=? AND status='leased' AND lease_until<=? AND attempts>=5 RETURNING id,message_ref,note",
+                       (now(), account, stamp)).fetchall()
+            for item in changed:
+                conversation_state.complete(db, account, item['message_ref'], item['id'], 'needs_owner', item['note'])
             row = db.execute("SELECT * FROM mail_work WHERE account_id=? AND "
                              "((status IN ('pending','retry') AND available_at<=?) OR "
                              "(status='leased' AND lease_until<=?)) ORDER BY id LIMIT 1",
@@ -140,6 +170,7 @@ class WorkQueue(AgentStore):
             db.execute("UPDATE mail_work SET status=?,note=?,available_at=?,updated_at=? WHERE id=?",
                        (status, note, available, now(), work_id))
             self._event(db, account, "work_" + status, {"work_id": work_id, "note": note})
+            conversation_state.complete(db, account, row['message_ref'], work_id, status, note)
         return {"status": status}
 
     def list_work(self, account, before=None, limit=50):
@@ -199,6 +230,8 @@ class WorkQueue(AgentStore):
                        "lease_until=NULL,updated_at=? WHERE id=? AND account_id=?",
                        (status, note, now(), work_id, account))
             self._event(db, account, 'owner_work_' + action, {'work_id': work_id, 'note': note})
+            if action == 'handled':
+                conversation_state.complete(db, account, row['message_ref'], work_id, status, note)
         return {'status': status}
 
 
