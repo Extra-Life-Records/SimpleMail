@@ -287,3 +287,18 @@ paused owner reads, account isolation, readable Activity and unchanged job setti
 with no runtime errors. The earlier live repair proof remains scoped to one
 newsletter. The original plan's navigation, conversation memory, recoverable filing,
 and mail-credential/image protection remain unfinished.
+
+### Main navigation (v1.5.0 source)
+
+Inbox, Needs you and Activity now open directly from the sidebar. Needs you and
+Activity use the main workspace rather than a modal. Agent setup is secondary,
+and other mail folders are collapsed under Folders. Account and view changes
+respect unsaved draft/job/connection edits and active actions; late responses
+cannot reopen a workspace that was left. Background folder discovery cannot
+close an agent workspace opened while the mailbox is connecting.
+
+Verified in Chromium with fixture messages: owner exception review, retry while
+paused, uncertain-send retry prevention, main view switching, and preserving
+unsaved job edits when discard is declined. Three routing regression tests cover
+late responses, competing requests, busy actions and unsaved drafts. Publication
+and installed verification of this build remain pending at this checkpoint.

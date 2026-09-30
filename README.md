@@ -9,14 +9,14 @@ HTML email rendering, a signature, and Sent/Drafts/Junk/Trash folders.
 
 ## Features
 
-The v1.4.1 release includes in-app model setup and Start/Pause controls, owner
+The v1.5.0 build includes in-app model setup and Start/Pause controls, owner
 review for exceptions as well as drafts, readable work outcomes, a scoped
 MCP connection, persistent drafts for
-review, and a small Agent panel. See [connection instructions](AGENT.md) and the
+review, and main Inbox / Needs you / Activity navigation. See [connection instructions](AGENT.md) and the
 [implementation plan](PLAN.md). This build has been installed and checked on the
 owner's x64 machine and is published with native x64 and ARM64 downloads.
 
-- ✅ **Inbox, Sent, Drafts, Junk, Trash** — one click in the sidebar
+- ✅ **Inbox, Needs you, Activity** — main navigation; other mail folders are under Folders
 - ✅ **Real HTML email rendering** (sandboxed iframe, scripts stripped)
 - ✅ **Compose with signature** — set it once in Settings, auto-appended
 - ✅ **Automatic local draft saving and recovery**; keep or discard
