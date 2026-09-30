@@ -52,7 +52,7 @@ else:
     _WEBVIEW_IMPORT_ERROR = None
 
 APP_NAME = "SimpleMail"
-APP_VERSION = "1.4.0"
+APP_VERSION = "1.4.1"
 APP_REPO = "Extra-Life-Records/SimpleMail"  # owner/repo for auto-updates
 CONFIG_DIR = Path(os.environ.get("APPDATA", str(Path.home()))) / APP_NAME
 CONFIG_FILE = CONFIG_DIR / "config.json"
@@ -1364,7 +1364,34 @@ class Api:
         store = self._agent_store()
         drafts = self.list_agent_drafts(account_id)
         return {"profile": store.profile(account_id), "drafts": drafts,
-                "activity": store.activity(account_id), "model": self.get_model_state(account_id)}
+                "activity": store.activity(account_id), "model": self.get_model_state(account_id),
+                "reviews": self.list_agent_reviews(account_id)}
+
+    def _review_queue(self):
+        from work_queue import WorkQueue
+        return WorkQueue(CONFIG_DIR / "agent" / "mailbox.sqlite3")
+
+    def list_agent_reviews(self, account_id, cursor=None):
+        self._acct(account_id)
+        return self._review_queue().owner_reviews(account_id, cursor)
+
+    def get_agent_review(self, account_id, work_id):
+        from mailbox_agent import MailboxAgent
+        self._acct(account_id)
+        queue = self._review_queue()
+        item = queue.owner_work(account_id, work_id)
+        mailbox = MailboxAgent(self.cfg, queue, account_id, owner_access=True)
+        try:
+            message = mailbox.read(item['message_ref'], 50000)
+        except Exception:
+            # Moved/deleted mail and connection failures must still be resolvable by the owner.
+            message = {**item['headers'], 'text': 'Message unavailable. Check the mailbox connection or whether it moved.',
+                       'unavailable': True, 'truncated': False}
+        return {"work": item, "message": message}
+
+    def resolve_agent_review(self, account_id, work_id, updated_at, action):
+        self._acct(account_id)
+        return self._review_queue().owner_resolve(account_id, work_id, updated_at, action)
 
     def _model_control(self):
         from model_control import ModelControl
