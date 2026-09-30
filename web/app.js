@@ -338,7 +338,19 @@ async function openMessage(uid, el) {
       // Links may open externally; email scripts and parent access stay blocked.
       iframe.sandbox = "allow-popups allow-popups-to-escape-sandbox";
       iframe.title = "Email message";
-      iframe.srcdoc = sanitizeHtml(msg.html);
+      iframe.referrerPolicy = "no-referrer";
+      const imageInfo = {};
+      iframe.srcdoc = sanitizeHtml(msg.html, false, imageInfo);
+      const images = document.createElement("button");
+      images.className = "outline secondary";
+      images.textContent = "Load images";
+      images.title = "Allow remote images for this message";
+      images.onclick = () => {
+        if (view !== mailboxView || request !== messageReadRequest || state.selectedUid !== uid) return;
+        iframe.srcdoc = sanitizeHtml(msg.html, true);
+        images.remove();
+      };
+      if (imageInfo.hasRemoteImages) $("read-body").appendChild(images);
       $("read-body").appendChild(iframe);
     } else {
       const pre = document.createElement("pre");
@@ -986,13 +998,31 @@ async function doUpdate() {
 
 /* ---------------- sanitize (keep it light - sandbox iframe does the heavy lifting) ---------------- */
 
-function sanitizeHtml(html) {
-  const doc = new DOMParser().parseFromString(String(html), "text/html");
-  doc.querySelectorAll("script,style,iframe,frame,object,embed,base,meta,link,form").forEach((el) => el.remove());
+function sanitizeHtml(html, allowImages = false, imageInfo = null) {
+  // Template content stays inert during parsing, including resource fetching.
+  const template = document.createElement("template");
+  template.innerHTML = String(html);
+  const doc = template.content;
+  doc.querySelectorAll("script,style,iframe,frame,object,embed,base,meta,link,form,svg,math,video,audio,source,track").forEach((el) => el.remove());
   doc.querySelectorAll("*").forEach((el) => {
     for (const attr of Array.from(el.attributes)) {
-      if (/^on/i.test(attr.name) || ["srcdoc", "ping", "formaction", "action", "xlink:href"].includes(attr.name)) el.removeAttribute(attr.name);
+      if (/^on/i.test(attr.name) || ["srcdoc", "srcset", "background", "ping", "formaction", "action", "xlink:href"].includes(attr.name)) el.removeAttribute(attr.name);
+      if (attr.name === "src" && el.tagName !== "IMG") el.removeAttribute(attr.name);
     }
+    // Preserve basic typography/layout without CSS resource-loading channels.
+    const allowed = /^(color|background-color|font-size|font-family|font-weight|font-style|text-align|text-decoration|line-height|white-space|width|height|max-width|min-width|padding(-\w+)?|margin(-\w+)?|border(-\w+)?|display|vertical-align)$/;
+    for (const property of Array.from(el.style || [])) {
+      if (!allowed.test(property) || /url\s*\(|image-set|var\s*\(|\\/i.test(el.style.getPropertyValue(property))) el.style.removeProperty(property);
+    }
+  });
+  doc.querySelectorAll("img").forEach(img => {
+    const raw = img.getAttribute("src") || "";
+    const embedded = /^data:image\/(png|gif|jpeg|webp|avif|bmp);base64,[a-z0-9+/=\s]+$/i.test(raw);
+    const remote = safeEmailLink(raw);
+    if (imageInfo && remote && /^https?:/i.test(remote)) imageInfo.hasRemoteImages = true;
+    if (!embedded && !(allowImages && remote && /^https?:/i.test(remote))) img.removeAttribute("src");
+    else if (!embedded) img.setAttribute("src", remote);
+    img.setAttribute("referrerpolicy", "no-referrer");
   });
   doc.querySelectorAll("a,area").forEach((link) => {
     const href = safeEmailLink(link.getAttribute("href"));
@@ -1005,10 +1035,8 @@ function sanitizeHtml(html) {
       link.removeAttribute("target");
     }
   });
-  const style = doc.createElement("style");
-  style.textContent = "html,body,body *{-webkit-user-select:text!important;user-select:text!important}body{overflow-wrap:anywhere}";
-  doc.head.appendChild(style);
-  return "<!doctype html>" + doc.documentElement.outerHTML;
+  const policy = `default-src 'none'; img-src data:${allowImages ? " https: http:" : ""}; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'`;
+  return `<!doctype html><html><head><meta http-equiv="Content-Security-Policy" content="${policy}"><meta name="referrer" content="no-referrer"><style>html,body,body *{-webkit-user-select:text!important;user-select:text!important}body{overflow-wrap:anywhere}img{max-width:100%}</style></head><body>${template.innerHTML}</body></html>`;
 }
 
 function safeEmailLink(value) {
