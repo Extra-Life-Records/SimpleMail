@@ -9,10 +9,10 @@ HTML email rendering, a signature, and Sent/Drafts/Junk/Trash folders.
 
 ## Features
 
-The local v1.3.0 build includes a scoped MCP connection, persistent drafts for
+The v1.3.1 release includes a scoped MCP connection, persistent drafts for
 review, and a small Agent panel. See [connection instructions](AGENT.md) and the
 [implementation plan](PLAN.md). This build has been installed and checked on the
-owner's x64 machine; it has not been published as a GitHub release.
+owner's x64 machine and is published with native x64 and ARM64 downloads.
 
 - ✅ **Inbox, Sent, Drafts, Junk, Trash** — one click in the sidebar
 - ✅ **Real HTML email rendering** (sandboxed iframe, scripts stripped)

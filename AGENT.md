@@ -1,7 +1,7 @@
 # Connect an AI to a SimpleMail mailbox
 
-The v1.3.0 desktop and console agent have been built and checked on the owner's
-x64 installation. GitHub publication is pending the native packaging checks.
+The v1.3.1 desktop and console agent are published for Windows x64 and ARM64.
+The released x64 files are installed and checked on the owner's machine.
 Use an MCP client that supports local stdio servers. No model provider is required
 by SimpleMail itself: the connected client supplies the model.
 
