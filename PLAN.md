@@ -317,3 +317,21 @@ permission lasts for that selected message. Embedded raster images remain usable
 Chromium tests observe zero default remote requests, one permitted picture,
 blocked CSS/media/SVG channels, safe links, permission reset and stale-control
 protection. The browser test now runs in CI. Installed delivery remains pending.
+
+### Credential protection (v1.5.2 source)
+
+v1.5.1 image privacy is published and installed, with WebView2 network checks
+proving zero default requests and only explicit picture requests. The mailbox
+remains paused and no message was sent.
+
+Mailbox and SMTP passwords are now sealed with current-user Windows DPAPI on
+save, including automatic migration of existing and legacy account configs.
+Writes seal first and replace atomically; protection/write failure preserves the
+original file and restores backend settings. Desktop and agent unlock secrets
+only in their backend processes. Public settings return blank password fields
+and saved/error flags. Blank inputs retain saved credentials; changing account
+or server requires replacement credentials, and SMTP fallback is explicit.
+Unavailable ciphertext survives ordinary settings saves and can be replaced.
+
+Ten credential tests and rendered settings checks cover these cases. Release
+and installed migration verification remain pending at this source checkpoint.

@@ -554,6 +554,8 @@ function stashAccountForm() {
   a.smtp_port = parseInt($("set-smtp-port").value, 10) || 587;
   a.smtp_user = $("set-smtp-user").value.trim();
   a.smtp_password = $("set-smtp-password").value;
+  a.clear_smtp_password = $("set-smtp-use-mailbox").checked;
+  if (a.clear_smtp_password) a.smtp_password = "";
   a.signature = $("set-signature").value;
 }
 
@@ -564,6 +566,7 @@ function showAccountForm(i) {
   $("set-color").value = a.color || "#2563eb";
   $("set-email").value = a.email || "";
   $("set-password").value = a.password || "";
+  $("set-password").placeholder = a.credential_error ? "Enter password to reconnect" : a.has_password ? "Saved — leave blank to keep" : "Mailbox password";
   $("set-from-email").value = a.from_email || "";
   $("set-imap-host").value = a.imap_host || "";
   $("set-imap-port").value = a.imap_port || 993;
@@ -571,6 +574,9 @@ function showAccountForm(i) {
   $("set-smtp-port").value = a.smtp_port || 587;
   $("set-smtp-user").value = a.smtp_user || "";
   $("set-smtp-password").value = a.smtp_password || "";
+  $("set-smtp-password").placeholder = a.has_smtp_password ? "Saved — leave blank to keep" : "Blank uses mailbox password";
+  $("set-smtp-use-mailbox").checked = Boolean(a.clear_smtp_password);
+  $("set-smtp-password").disabled = Boolean(a.clear_smtp_password);
   $("set-signature").value = a.signature || "";
   renderSigPreview();
   renderRules(a.id, a.rules || {});
@@ -640,6 +646,7 @@ async function saveSettings() {
     });
     applyScale($("set-scale").value);
     $("settings-backdrop").classList.remove("show");
+    clearSettingsSecrets();
     toast("Settings saved");
     await reloadAccounts();
   } catch (e) {
@@ -655,6 +662,12 @@ function applyScale(scale) {
   root.style.fontSize = sizes[scale] || sizes.default;
   document.body.classList.toggle("compact", scale === "compact");
   document.body.classList.toggle("large", scale === "large");
+}
+
+function clearSettingsSecrets() {
+  editAccounts.forEach(account => { account.password = ""; account.smtp_password = ""; });
+  $("set-password").value = "";
+  $("set-smtp-password").value = "";
 }
 
 async function testConnection() {
@@ -710,8 +723,15 @@ async function init() {
   $("settings-btn").addEventListener("click", openSettings);
   $("agent-btn").addEventListener("click", () => openAgent("job"));
   $("settings-save").addEventListener("click", saveSettings);
-  $("settings-cancel").addEventListener("click", () => $("settings-backdrop").classList.remove("show"));
+  $("settings-cancel").addEventListener("click", () => {
+    $("settings-backdrop").classList.remove("show");
+    clearSettingsSecrets();
+  });
   $("test-btn").addEventListener("click", testConnection);
+  $("set-smtp-use-mailbox").addEventListener("change", () => {
+    $("set-smtp-password").disabled = $("set-smtp-use-mailbox").checked;
+    if ($("set-smtp-use-mailbox").checked) $("set-smtp-password").value = "";
+  });
   $("set-account-picker").addEventListener("change", switchEditedAccount);
   $("acct-add-btn").addEventListener("click", addAccount);
   $("acct-remove-btn").addEventListener("click", removeAccount);

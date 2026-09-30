@@ -8,7 +8,7 @@ const {chromium}=require(process.env.SIMPLEMAIL_PLAYWRIGHT_MODULE || 'playwright
  await page.route('https://tracking.example.invalid/**',r=>{requests.push(r.request().url());return r.fulfill({status:200,contentType:'image/png',body:Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+a7xkAAAAASUVORK5CYII=','base64')});});
  await page.addInitScript(()=>{
  const html='<img src="https://tracking.example.invalid/pixel" srcset="https://tracking.example.invalid/srcset 2x"><div style="background-image:url(https://tracking.example.invalid/css);color:red">Text</div><svg><image href="https://tracking.example.invalid/svg"/></svg><iframe src="https://tracking.example.invalid/frame"></iframe><video poster="https://tracking.example.invalid/poster"><source src="https://tracking.example.invalid/media"></video><link rel="stylesheet" href="https://tracking.example.invalid/style"><script>parent.attack=true</script><img src="javascript:attack()"><a href="javascript:attack()">Bad</a><a href="https://example.invalid">Safe</a>';
- window.pywebview={api:{get_config:async()=>({accounts:[{id:'fixture',label:'Fixture',identity:'qa@example.invalid'}],active_account:'fixture'}),get_folders:async()=>({folders:[{key:'inbox',name:'Inbox',server:'INBOX',unread:0}]}),list_messages:async()=>({envelopes:[],inbox_unread:0}),set_active_account:async()=>{},check_update:async()=>({available:false}),get_message:async(a,f,uid)=>({subject:'Fixture',sender:'qa@example.invalid',text:'Text',html:uid==='plain'?'<p>No remote images</p>':html,attachments:[]})}};
+ window.pywebview={api:{get_config:async()=>({accounts:[{id:'fixture',label:'Fixture',email:'qa@example.invalid',identity:'qa@example.invalid',has_password:true,has_smtp_password:true}],active_account:'fixture'}),get_folders:async()=>({folders:[{key:'inbox',name:'Inbox',server:'INBOX',unread:0}]}),list_messages:async()=>({envelopes:[],inbox_unread:0}),set_active_account:async()=>{},check_update:async()=>({available:false}),get_message:async(a,f,uid)=>({subject:'Fixture',sender:'qa@example.invalid',text:'Text',html:uid==='plain'?'<p>No remote images</p>':html,attachments:[]})}};
  });
  await page.goto(process.env.SIMPLEMAIL_TEST_URL || require('node:url').pathToFileURL(require('node:path').join(__dirname,'../web/index.html')).href);
  await page.waitForFunction(()=>state.folders.length>0 && api);
@@ -32,7 +32,28 @@ const {chromium}=require(process.env.SIMPLEMAIL_PLAYWRIGHT_MODULE || 'playwright
  // Detached controls must never grant permission after changing mailbox/view.
  await page.evaluate(async()=>{await openMessage('three');window.oldImages=document.querySelector('#read-body button');await openMessage('plain');oldImages.onclick();});
  assert.equal(requests.length,1);
+ await page.evaluate(()=>{api.save_config=async data=>{window.savedAccount=structuredClone(data.accounts[0]);return {ok:true};};});
+ await page.evaluate(()=>openSettings());
+ assert.equal(await page.locator('#set-password').inputValue(),'');
+ assert.match(await page.locator('#set-password').getAttribute('placeholder'),/Saved/);
+ await page.locator('#set-password').fill('replacement');
+ await page.locator('#settings-cancel').click();
+ assert.equal(await page.locator('#set-password').inputValue(),'');
+ await page.evaluate(()=>openSettings());
+ await page.locator('#set-password').fill('replacement');
+ await page.locator('#settings-save').click();
+ await page.waitForFunction(()=>!document.querySelector('#settings-backdrop').classList.contains('show'));
+ assert.equal(await page.evaluate(()=>savedAccount.password),'replacement');
+ assert.equal(await page.locator('#set-password').inputValue(),'');
+ assert.equal(await page.evaluate(()=>editAccounts[0].password),'');
+ await page.evaluate(()=>openSettings());
+ await page.locator('details.advanced summary').click();
+ await page.locator('#set-smtp-use-mailbox').check();
+ assert.equal(await page.locator('#set-smtp-password').isDisabled(),true);
+ await page.locator('#settings-save').click();
+ await page.waitForFunction(()=>!document.querySelector('#settings-backdrop').classList.contains('show'));
+ assert.equal(await page.evaluate(()=>savedAccount.clear_smtp_password),true);
  assert.deepEqual(errors,[]);
- console.log(JSON.stringify({defaultRequests:0,explicitImagesOnly:true,nextMessageBlocked:true,staleConsentBlocked:true,noExtraButton:true,unsafeLinksBlocked:true,passed:true}));
+ console.log(JSON.stringify({defaultRequests:0,explicitImagesOnly:true,nextMessageBlocked:true,staleConsentBlocked:true,noExtraButton:true,unsafeLinksBlocked:true,credentialSettings:true,passed:true}));
  } finally {await browser.close();}
 })().catch(e=>{console.error(e);process.exitCode=1});
