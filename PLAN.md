@@ -242,4 +242,22 @@ from the initial baseline. No model or live mailbox has been selected for this g
 Sixteen focused checks cover DPAPI, account/key isolation, concurrent launch,
 stale-worker revocation, owner stop and a real isolated source subprocess. Rendered
 setup checks cover secret clearing, preserving job edits, Start/Pause and disabling
-setup edits while running. Full regression and release/install gates are pending.
+setup edits while running. All 119 Python tests and 21 frontend tests passed.
+
+v1.4.0 is merged and public. Both native packaging jobs passed the managed-worker
+start/pause check, and all four downloads match GitHub's published digests and PE
+architectures. Released x64 files are installed; the console passed the extended
+smoke check, and actual installed WebView2 verified the saved model fields, blank
+key field, paused Start control and unchanged job permissions without runtime errors.
+
+The owner authorized one existing mailbox for a live check. An already-cached
+local Ollama qwen3.5:4b model used the Responses adapter to read one existing
+newsletter. Its read left the Seen flag unchanged, and no send was started. The
+model produced prose rather than complete_work, so the durable work became
+needs_owner. This proves real model/mailbox wiring and safe escalation, not reliable
+autonomous triage. The job is now paused in draft-for-review mode with no recipient
+grants, and the local connection is saved. Improve model completion behaviour and
+surface nondraft escalations next; the rest of the original plan remains open.
+
+Installed desktop SHA256: `09735DF956CAEE37D7C6FDAF93F2CD1D4ECE618F56431C3F1C0DBFBB53AC7AE2`.
+Installed agent SHA256: `3447446452D55E30F134CA9DAE5B6FEBD1921228D0E95FA1DEDD8CD632B9F068`.
