@@ -566,7 +566,7 @@ function showAccountForm(i) {
   $("set-color").value = a.color || "#2563eb";
   $("set-email").value = a.email || "";
   $("set-password").value = a.password || "";
-  $("set-password").placeholder = a.credential_error ? "Enter password to reconnect" : a.has_password ? "Saved — leave blank to keep" : "Mailbox password";
+  $("set-password").placeholder = a.password_error ? "Enter password to reconnect" : a.has_password ? "Saved — leave blank to keep" : "Mailbox password";
   $("set-from-email").value = a.from_email || "";
   $("set-imap-host").value = a.imap_host || "";
   $("set-imap-port").value = a.imap_port || 993;
@@ -574,7 +574,7 @@ function showAccountForm(i) {
   $("set-smtp-port").value = a.smtp_port || 587;
   $("set-smtp-user").value = a.smtp_user || "";
   $("set-smtp-password").value = a.smtp_password || "";
-  $("set-smtp-password").placeholder = a.has_smtp_password ? "Saved — leave blank to keep" : "Blank uses mailbox password";
+  $("set-smtp-password").placeholder = a.smtp_password_error ? "Enter password to reconnect" : a.has_smtp_password ? "Saved — leave blank to keep" : "Blank uses mailbox password";
   $("set-smtp-use-mailbox").checked = Boolean(a.clear_smtp_password);
   $("set-smtp-password").disabled = Boolean(a.clear_smtp_password);
   $("set-signature").value = a.signature || "";

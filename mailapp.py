@@ -1104,6 +1104,8 @@ class Api:
                 "password": "",
                 "has_password": bool(acct["password"] or "password" in acct.get("_locked_credentials", {})),
                 "credential_error": bool(acct.get("_locked_credentials")),
+                "password_error": "password" in acct.get("_locked_credentials", {}),
+                "smtp_password_error": "smtp_password" in acct.get("_locked_credentials", {}),
                 "from_email": acct.get("from_email", ""),
                 "identity": from_address(acct),
                 "imap_host": acct["imap_host"],
@@ -1196,6 +1198,9 @@ class Api:
         return {"ok": ok, "error": None if ok else "; ".join(l for okk, l in results if not okk)}
 
     def _retain_credentials(self, acct, raw):
+        for field in ("password", "smtp_password"):
+            if not isinstance(acct[field], str) or not isinstance(raw.get("clear_" + field, False), bool):
+                raise ValueError("Invalid password input")
         try:
             stored = self.cfg.account(acct["id"])
         except KeyError:
