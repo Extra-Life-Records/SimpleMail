@@ -5,7 +5,7 @@ The released x64 files are installed and checked on the owner's machine.
 Use an MCP client that supports local stdio servers. No model provider is required
 by SimpleMail itself: the connected client supplies the model.
 
-For a built-in background worker, open **Agent → Job → Connect a model**. Enter
+For a built-in background worker, open **Agent setup → Connect a model**. Enter
 the provider endpoint, model ID and API format, then the key if needed. Save the
 connection, save your job and enable access, then choose **Start agent**. A localhost
 model can run without a key. Windows DPAPI protects saved keys for your Windows

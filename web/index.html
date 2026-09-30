@@ -416,6 +416,13 @@
   #agent-content button { width: auto; padding: 7px 12px; margin-bottom: 0; }
   #agent-content .agent-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
   #agent-status { font-size: .85rem; color: var(--pico-muted-color); margin-bottom: 12px; }
+
+  body.agent-open #list-pane, body.agent-open #divider, body.agent-open #read-pane { display: none; }
+  body.agent-open #agent-backdrop.show { position: static; flex: 1; min-width: 0; background: #fff; display: block; overflow-y: auto; padding: 32px; }
+  body.agent-open #agent-modal { width: min(900px, 100%); max-width: none; max-height: none; margin: 0 auto; padding: 0; box-shadow: none; border-radius: 0; overflow: visible; }
+  body.agent-open #agent-tabs { display: none; }
+  #mail-folders { margin-top: 16px; font-size: 14px; }
+  #mail-folders summary { padding: 8px 10px; color: #687082; }
 </style>
 </head>
 <body>
@@ -432,10 +439,15 @@
 
     <div id="accounts"></div>
     <hr>
-    <div id="folders"></div>
+    <nav aria-label="Main navigation">
+      <button class="folder" id="inbox-btn" data-key="inbox">Inbox</button>
+      <button class="folder" id="needs-you-btn" data-workspace="drafts">Needs you</button>
+      <button class="folder" id="activity-btn" data-workspace="activity">Activity</button>
+    </nav>
+    <details id="mail-folders"><summary>Folders</summary><div id="folders"></div></details>
 
     <div id="sidebar-footer">
-      <button class="folder" id="agent-btn">Agent</button>
+      <button class="folder" id="agent-btn" data-workspace="job">Agent setup</button>
       <button class="folder" id="settings-btn">
         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09a1.65 1.65 0 0 0-1-1.51 1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09a1.65 1.65 0 0 0 1.51-1 1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33h.01a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51h.01a1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82v.01a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
         Settings
@@ -595,7 +607,7 @@
   </div>
 
   <div class="modal-backdrop" id="agent-backdrop">
-    <section class="modal" id="agent-modal" role="dialog" aria-modal="true" aria-labelledby="agent-title">
+    <section class="modal" id="agent-modal" role="region" aria-labelledby="agent-title">
       <h2 id="agent-title">Mailbox agent</h2>
       <div id="agent-status" role="status"></div>
       <nav id="agent-tabs" aria-label="Mailbox agent views">
@@ -604,7 +616,7 @@
         <button class="outline" data-agent-tab="activity">Activity</button>
       </nav>
       <div id="agent-content"></div>
-      <div class="actions"><button class="outline secondary" id="agent-close">Close</button></div>
+      <div class="actions"><button class="outline secondary" id="agent-close">Back to Inbox</button></div>
     </section>
   </div>
 <script src="app.js"></script>

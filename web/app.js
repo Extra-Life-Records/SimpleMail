@@ -118,9 +118,11 @@ function renderAccounts() {
     btn.addEventListener("click", () => selectAccount(a.id));
     box.appendChild(btn);
   });
+  if (typeof renderAgentNavigation === "function") renderAgentNavigation();
 }
 
 async function selectAccount(accountId) {
+  if (typeof leaveAgentWorkspace === "function" && !leaveAgentWorkspace()) return;
   if (!state.accounts.some((a) => a.id === accountId)) return;
   const view = resetMailboxView();
   state.activeAccountId = accountId;
@@ -146,7 +148,7 @@ async function selectAccount(accountId) {
   }
   state.currentFolder = "inbox";
   renderFolders();
-  await selectFolder("inbox");
+  if (typeof agentVisible !== "function" || !agentVisible()) await selectFolder("inbox");
 }
 
 /* ---------------- folders ---------------- */
@@ -162,6 +164,10 @@ function renderFolders() {
     trash: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 6h18"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"/><path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>',
   };
   state.folders.forEach((f) => {
+    if (f.key === "inbox") {
+      $("inbox-btn").innerHTML = `<span>Inbox</span>` + (f.unread > 0 ? `<span class="badge">${f.unread > 99 ? "99+" : f.unread}</span>` : "");
+      return;
+    }
     const btn = document.createElement("button");
     btn.className = "folder" + (f.key === state.currentFolder ? " active" : "");
     btn.dataset.key = f.key;
@@ -175,6 +181,7 @@ function renderFolders() {
 }
 
 function selectFolder(key) {
+  if (typeof leaveAgentWorkspace === "function" && !leaveAgentWorkspace()) return;
   resetMailboxView();
   state.currentFolder = key;
   state.selectedUid = null;
@@ -689,7 +696,7 @@ async function init() {
   $("draft-btn").addEventListener("click", saveDraft);
   $("cancel-btn").addEventListener("click", discardCompose);
   $("settings-btn").addEventListener("click", openSettings);
-  $("agent-btn").addEventListener("click", openAgent);
+  $("agent-btn").addEventListener("click", () => openAgent("job"));
   $("settings-save").addEventListener("click", saveSettings);
   $("settings-cancel").addEventListener("click", () => $("settings-backdrop").classList.remove("show"));
   $("test-btn").addEventListener("click", testConnection);

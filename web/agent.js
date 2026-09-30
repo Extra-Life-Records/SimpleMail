@@ -4,15 +4,18 @@
 let agentView = null;
 let agentRequest = 0;
 
-async function openAgent() {
+async function openAgent(tab = "job") {
+  if (agentVisible() && (agentView?.busy || !agentDiscardAllowed())) return;
   const acct = activeAccount();
   if (!acct) { toast("Add a mailbox first", true); return; }
   const request = ++agentRequest;
-  agentView = { accountId: acct.id, label: acct.label, tab: "job", data: null, draft: null, busy: false };
+  agentView = { accountId: acct.id, label: acct.label, tab, data: null, draft: null, busy: false };
   $("agent-title").textContent = `Agent · ${acct.label}`;
   $("agent-content").textContent = "Loading…";
   $("agent-status").textContent = "";
   $("agent-backdrop").classList.add("show");
+  document.body.classList.add("agent-open");
+  renderAgentNavigation();
   try {
     const data = await api.get_agent_state(acct.id);
     if (request !== agentRequest) return;
@@ -23,12 +26,35 @@ async function openAgent() {
   }
 }
 
-function closeAgent() {
-  if (agentView?.busy) return;
-  if (!agentDiscardAllowed()) return;
+function agentVisible() {
+  return $("agent-backdrop").classList.contains("show");
+}
+
+function renderAgentNavigation() {
+  document.querySelectorAll(".folder").forEach(button => {
+    const selected = agentVisible() ? button.dataset.workspace === agentView?.tab :
+      button.dataset.key === state.currentFolder;
+    button.classList.toggle("active", selected);
+    button.setAttribute("aria-current", selected ? "page" : "false");
+  });
+}
+
+function leaveAgentWorkspace() {
+  if (!agentVisible()) return true;
+  if (agentView?.busy || !agentDiscardAllowed()) return false;
   ++agentRequest;
   $("agent-backdrop").classList.remove("show");
-  $("agent-btn").focus();
+  document.body.classList.remove("agent-open");
+  agentView = null;
+  renderAgentNavigation();
+  return true;
+}
+
+function closeAgent() {
+  if (leaveAgentWorkspace()) {
+    selectFolder("inbox");
+    $("inbox-btn").focus();
+  }
 }
 
 function agentDraftFields() {
@@ -57,6 +83,8 @@ function renderAgent() {
   const view = agentView;
   if (!view?.data) return;
   const { profile, drafts } = view.data;
+  $("agent-title").textContent = `${{ job: "Agent setup", drafts: "Needs you", activity: "Activity" }[view.tab]} · ${view.label}`;
+  renderAgentNavigation();
   $("agent-status").textContent = `${profile.enabled ? "Connected agents can read and draft" : "Agent access paused"} · ` +
     (profile.mode === "reply_to_allowed" ? "Automatic replies limited to allowed recipients" : "Replies need your approval");
   document.querySelectorAll("[data-agent-tab]").forEach(button => {
@@ -335,3 +363,7 @@ document.addEventListener("keydown", event => {
     closeAgent();
   }
 });
+
+$("inbox-btn").addEventListener("click", () => selectFolder("inbox"));
+$("needs-you-btn").addEventListener("click", () => openAgent("drafts"));
+$("activity-btn").addEventListener("click", () => openAgent("activity"));
