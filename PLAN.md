@@ -225,3 +225,21 @@ ARM64 packaging is verified on a native runner; an ARM64 owner-device installati
 is not claimed. In-app model setup and worker controls, conversation memory,
 recoverable filing, simpler main navigation, credential and image protection,
 and a user-selected live model workflow remain open in the original plan.
+
+## In-app model connection and managed worker
+
+Implemented owner-only saved endpoint/model/API setup with a password field for
+the provider key. Windows DPAPI protects the key under the current Windows user;
+frontend state and worker command lines contain no key or encrypted secret.
+Retained keys cannot follow a changed provider endpoint. Connection edits require
+a stopped worker. Start launches the packaged console independently of the desktop;
+Pause revokes mailbox permissions and requests worker shutdown. SQLite launch
+reservations, heartbeats and generation tokens prevent duplicate and stale workers.
+The model loop checks owner cancellation before provider and mailbox actions.
+Status polling preserves unsaved setup/job text. Existing Inbox mail is excluded
+from the initial baseline. No model or live mailbox has been selected for this gate.
+
+Sixteen focused checks cover DPAPI, account/key isolation, concurrent launch,
+stale-worker revocation, owner stop and a real isolated source subprocess. Rendered
+setup checks cover secret clearing, preserving job edits, Start/Pause and disabling
+setup edits while running. Full regression and release/install gates are pending.

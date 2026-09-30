@@ -48,6 +48,7 @@ function agentDiscardAllowed() {
     if ($("agent-job").value !== profile.job || mode !== (profile.mode || "draft_for_review") ||
         JSON.stringify([...new Set(addresses)]) !== JSON.stringify(profile.allowed_recipients || []))
       return confirm("Discard the unsaved job or permission changes?");
+    if (agentModelDirty()) return confirm("Discard the unsaved model connection?");
   }
   return true;
 }
@@ -69,7 +70,7 @@ function renderAgent() {
     return;
   }
   if (view.tab === "job") {
-    box.innerHTML = `<p>Give this mailbox a job. Connect your preferred AI using SimpleMail’s mailbox tools; it can read mail and prepare replies here.</p>
+    box.innerHTML = `<p>Give this mailbox a job. Choose a model below or connect an external agent to read mail and prepare replies here.</p>
       <label for="agent-job">What should the agent handle?</label>
       <textarea id="agent-job" placeholder="Handle incoming enquiries. Draft concise replies and ask me when information is missing."></textarea>
       <p class="agent-muted">Only this mailbox is assigned. Email senders cannot change this job or authorize sending.</p>
@@ -80,12 +81,42 @@ function renderAgent() {
       <p class="agent-muted">Exact addresses only. Other recipients still need your approval. Automatic/list messages
       and repeated automatic replies are blocked. Your job instructions still apply.</p></details>
       <div class="agent-actions"><button id="agent-save-job">Save job</button>
-      <button class="outline" id="agent-toggle">${profile.enabled ? "Pause access" : "Enable access"}</button></div>`;
+      <button class="outline" id="agent-toggle">${profile.enabled ? "Pause agent" : "Enable access"}</button></div>
+      <details id="agent-model-setup"><summary>Connect a model</summary>
+      <label for="agent-model-endpoint">Provider endpoint</label><input id="agent-model-endpoint" type="url" placeholder="https://api.openai.com/v1/responses">
+      <label for="agent-model-name">Model</label><input id="agent-model-name" placeholder="Exact model ID">
+      <label for="agent-model-api">API format</label><select id="agent-model-api"><option value="responses">Responses</option><option value="chat">Chat Completions</option></select>
+      <label for="agent-model-key">API key</label><input id="agent-model-key" type="password" autocomplete="off">
+      <label><input type="checkbox" id="agent-model-clear">Remove saved key</label>
+      <p class="agent-muted">Keys are protected for your Windows user. A remote provider receives mailbox content when the worker runs. Local models can use a localhost endpoint.</p>
+      <button class="outline" id="agent-model-save">Save connection</button></details>
+      <p id="agent-worker-status" class="agent-muted"></p>
+      <button id="agent-worker-start" class="outline">Start agent</button>
+      <p class="agent-muted">The worker continues while this window is closed. It starts with new Inbox mail; existing mail is left alone.</p>`;
     $("agent-job").value = profile.job;
     $("agent-auto-reply").checked = profile.mode === "reply_to_allowed";
     $("agent-allowed").value = (profile.allowed_recipients || []).join("\n");
     $("agent-save-job").onclick = () => changeAgentSettings(profile.enabled);
     $("agent-toggle").onclick = () => changeAgentSettings(!profile.enabled, true);
+    const connection = view.data.model || {};
+    $("agent-model-endpoint").value = connection.endpoint || "";
+    $("agent-model-name").value = connection.model || "";
+    $("agent-model-api").value = connection.api || "responses";
+    $("agent-model-key").placeholder = connection.has_key ? "Saved securely; leave blank to keep" : "Provider key (optional for localhost)";
+    $("agent-model-save").onclick = () => runAgentAction(async current => {
+      current.data.model = await api.save_model_connection(current.accountId, $("agent-model-endpoint").value,
+        $("agent-model-name").value, $("agent-model-api").value, $("agent-model-key").value, $("agent-model-clear").checked);
+      $("agent-model-key").value = "";
+      $("agent-model-clear").checked = false;
+      $("agent-model-key").placeholder = current.data.model.has_key ? "Saved securely; leave blank to keep" : "Provider key (optional for localhost)";
+      toast("Model connection saved");
+    }, false);
+    $("agent-worker-start").onclick = () => {
+      if (agentModelDirty()) { toast("Save the model connection first", true); return; }
+      if (!agentDiscardAllowed()) return;
+      runAgentAction(async current => { current.data.model = await api.start_model_worker(current.accountId); toast("Starting agent"); });
+    };
+    renderWorkerStatus();
   } else if (view.tab === "drafts") {
     box.innerHTML = drafts.items.length ? drafts.items.map((draft, index) =>
       `<div class="agent-card"><h3>${escapeHtml(draft.payload.subject || "(no subject)")}</h3>
@@ -127,26 +158,28 @@ function addAgentMore(box, cursor, tab) {
   box.appendChild(button);
 }
 
-async function runAgentAction(action) {
+async function runAgentAction(action, render = true) {
   const view = agentView;
   if (!view || view.busy) return;
   view.busy = true;
-  $("agent-modal").querySelectorAll("button,input,textarea").forEach(control => { control.disabled = true; });
+  $("agent-modal").querySelectorAll("button,input,textarea,select").forEach(control => { control.disabled = true; });
   try {
     await action(view);
-    if (agentView === view) renderAgent();
+    if (agentView === view && render) renderAgent();
   } catch (error) {
     toast(String(error), true);
     // Preserve unsaved input on errors, including stale draft revisions.
   } finally {
     view.busy = false;
-    $("agent-modal").querySelectorAll("button,input,textarea").forEach(control => { control.disabled = false; });
+    $("agent-modal").querySelectorAll("button,input,textarea,select").forEach(control => { control.disabled = false; });
+    renderWorkerStatus();
   }
 }
 
 async function changeAgentSettings(enabled, toggle = false) {
   // Pause remains immediate even if the owner has incomplete unsaved permission edits.
   const pausing = toggle && !enabled;
+  if (!pausing && agentModelDirty()) { toast("Save the model connection first", true); return; }
   const profile = agentView.data.profile;
   const job = pausing ? profile.job : $("agent-job").value;
   const mode = pausing ? (profile.mode || "draft_for_review") :
@@ -155,9 +188,40 @@ async function changeAgentSettings(enabled, toggle = false) {
   await runAgentAction(async view => {
     view.data.profile = await api.save_agent_settings(view.accountId, enabled, job, mode, allowed);
     view.data.activity = await api.list_agent_activity(view.accountId);
+    view.data.model = await api.get_model_state(view.accountId);
     toast(enabled ? "Agent job saved; access enabled" : "Agent access paused");
   });
 }
+
+function agentModelDirty() {
+  if (!$("agent-model-endpoint")) return false;
+  const saved = agentView.data.model || {};
+  return $("agent-model-endpoint").value !== (saved.endpoint || "") ||
+    $("agent-model-name").value !== (saved.model || "") ||
+    $("agent-model-api").value !== (saved.api || "responses") ||
+    Boolean($("agent-model-key").value) || $("agent-model-clear").checked;
+}
+
+function renderWorkerStatus() {
+  if (!agentView || !$("agent-worker-status")) return;
+  const connection = agentView.data.model || {};
+  const labels = {starting: "Starting", running: "Processing Inbox", idle: "Watching for new mail",
+    paused: "Paused", stopping: "Stopping", stopped: "Stopped", interrupted: "Worker interrupted",
+    failed: "Worker needs attention", unavailable: "Connection needs attention", needs_owner: "Waiting for your review"};
+  $("agent-worker-status").textContent = `Worker: ${labels[connection.status] || connection.status || "Stopped"}` +
+    (connection.detail ? ` · ${connection.detail}` : "");
+  $("agent-worker-start").disabled = agentView.busy || connection.active || !connection.configured || !agentView.data.profile.enabled;
+  $("agent-model-save").disabled = agentView.busy || connection.active;
+}
+
+setInterval(async () => {
+  const view = agentView;
+  if (!view?.data || view.busy || view.tab !== "job" || !$("agent-backdrop").classList.contains("show")) return;
+  try {
+    const connection = await api.get_model_state(view.accountId);
+    if (agentView === view && view.tab === "job" && !view.busy) { view.data.model = connection; renderWorkerStatus(); }
+  } catch (_) { /* Keep the form and its unsaved edits when status is temporarily unavailable. */ }
+}, 3000);
 
 function renderAgentDraft() {
   const draft = agentView.draft;
