@@ -403,6 +403,18 @@
     border-radius: 50%; animation: spin 0.7s linear infinite; vertical-align: -3px;
   }
   @keyframes spin { to { transform: rotate(360deg); } }
+  #agent-modal { width: 760px; }
+  #agent-tabs { display: flex; justify-content: flex-start; gap: 8px; margin-bottom: 18px; }
+  #agent-tabs button { width: auto; margin: 0; padding: 7px 12px; }
+  #agent-content { min-height: 200px; }
+  #agent-content textarea { min-height: 120px; }
+  #agent-content .agent-card { padding: 14px; border: 1px solid #dbe2ea; border-radius: 10px; margin-bottom: 10px; }
+  #agent-content .agent-card h3 { margin: 0 0 6px; font-size: 1rem; }
+  #agent-content p { margin: 0 0 12px; }
+  #agent-content .agent-muted { color: var(--pico-muted-color); font-size: .85rem; }
+  #agent-content button { width: auto; padding: 7px 12px; margin-bottom: 0; }
+  #agent-content .agent-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
+  #agent-status { font-size: .85rem; color: var(--pico-muted-color); margin-bottom: 12px; }
 </style>
 </head>
 <body>
@@ -422,6 +434,7 @@
     <div id="folders"></div>
 
     <div id="sidebar-footer">
+      <button class="folder" id="agent-btn">Agent</button>
       <button class="folder" id="settings-btn">
         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09a1.65 1.65 0 0 0-1-1.51 1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09a1.65 1.65 0 0 0 1.51-1 1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33h.01a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51h.01a1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82v.01a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
         Settings
@@ -465,10 +478,16 @@
       <div id="read-meta"></div>
       <div id="read-actions">
         <button id="reply-btn" class="outline">Reply</button>
+        <button id="reply-all-btn" class="outline">Reply all</button>
         <button id="forward-btn" class="outline">Forward</button>
         <button id="unread-btn" class="outline">Mark unread</button>
         <button id="delete-btn" class="outline secondary">Delete</button>
       </div>
+      <details id="conversation-history" hidden>
+        <summary>Conversation history</summary>
+        <div id="conversation-items" style="max-height:30vh;overflow:auto"></div>
+        <button class="outline" id="conversation-more" style="width:auto;padding:4px 12px" hidden>Load more history</button>
+      </details>
     </div>
     <div id="read-body">
       <div id="loading">Select a message</div>
@@ -481,15 +500,23 @@
       <h2>New message</h2>
       <div class="field"><label>From (fixed to this mailbox)</label><div id="compose-from" class="from-strip"></div></div>
       <div class="field"><label>To</label><input type="text" id="compose-to" placeholder="name@example.com"></div>
+      <details id="compose-copies"><summary>CC / BCC</summary>
+        <label for="compose-cc">CC</label><input type="text" id="compose-cc">
+        <label for="compose-bcc">BCC</label><input type="text" id="compose-bcc">
+      </details>
       <div class="field"><label>Subject</label><input type="text" id="compose-subject"></div>
       <div class="field"><label>Message</label>
         <div id="compose-body" contenteditable="true" class="rich-editor"></div>
       </div>
+      <div id="compose-attachments"></div>
+      <button id="compose-attach" class="outline" style="width:auto;align-self:flex-start;padding:5px 12px">Attach files</button>
+      <input type="file" id="compose-file-input" multiple hidden>
       <div class="actions">
-        <button class="outline" id="draft-btn">Save draft</button>
-        <button class="outline secondary" id="cancel-btn">Cancel</button>
+        <button class="outline" id="draft-btn">Keep draft</button>
+        <button class="outline secondary" id="cancel-btn">Discard</button>
         <button id="send-btn">Send</button>
       </div>
+      <small id="compose-save-status" role="status">Saved on this device</small>
     </div>
   </div>
 
@@ -566,6 +593,22 @@
     </div>
   </div>
 
+  <div class="modal-backdrop" id="agent-backdrop">
+    <section class="modal" id="agent-modal" role="dialog" aria-modal="true" aria-labelledby="agent-title">
+      <h2 id="agent-title">Mailbox agent</h2>
+      <div id="agent-status" role="status"></div>
+      <nav id="agent-tabs" aria-label="Mailbox agent views">
+        <button class="outline" data-agent-tab="job">Job</button>
+        <button class="outline" data-agent-tab="drafts">Needs you</button>
+        <button class="outline" data-agent-tab="activity">Activity</button>
+      </nav>
+      <div id="agent-content"></div>
+      <div class="actions"><button class="outline secondary" id="agent-close">Close</button></div>
+    </section>
+  </div>
 <script src="app.js"></script>
+<script src="compose.js"></script>
+<script src="conversation.js"></script>
+<script src="agent.js"></script>
 </body>
 </html>

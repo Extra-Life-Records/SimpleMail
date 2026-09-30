@@ -9,10 +9,21 @@ HTML email rendering, a signature, and Sent/Drafts/Junk/Trash folders.
 
 ## Features
 
+The local v1.3.0 build includes a scoped MCP connection, persistent drafts for
+review, and a small Agent panel. See [connection instructions](AGENT.md) and the
+[implementation plan](PLAN.md). This build has been installed and checked on the
+owner's x64 machine; it has not been published as a GitHub release.
+
 - ✅ **Inbox, Sent, Drafts, Junk, Trash** — one click in the sidebar
 - ✅ **Real HTML email rendering** (sandboxed iframe, scripts stripped)
 - ✅ **Compose with signature** — set it once in Settings, auto-appended
-- ✅ **Save drafts**, delete messages, reply (Re: prefilled)
+- ✅ **Automatic local draft saving and recovery**; keep or discard
+  drafts and resume them from Drafts after restarting. New human drafts are saved
+  on this device; existing server drafts remain visible.
+- ✅ Reply, Reply All, forwarding with files, CC/BCC and outgoing attachments.
+  Attachments survive local draft recovery; replies honour Reply-To and
+  preserve conversation headers.
+- ✅ Delete messages
 - ✅ Unread counts, message snippets, modern three-pane layout
 - ✅ Click links in HTML and plain-text emails to open them in your browser
 - ✅ Mail refreshes every 30 seconds and when returning to the app, preserving
@@ -93,8 +104,9 @@ Prints IMAP + SMTP connection results — handy for debugging.
 SimpleMail distributes itself through **GitHub releases**:
 
 - Repo: https://github.com/Extra-Life-Records/SimpleMail
-- Each release carries two assets: `SimpleMail-x64.exe` (built automatically by
-  GitHub Actions) and `SimpleMail-arm64.exe` (built on an ARM64 machine).
+- Each release carries desktop and console agent executables for x64 and ARM64:
+  `SimpleMail-x64.exe`, `SimpleMail-arm64.exe`, `SimpleMailAgent-x64.exe`, and
+  `SimpleMailAgent-arm64.exe`. GitHub Actions builds each on its native architecture.
 - On launch, the app silently checks the latest release; if a newer version
   exists it offers **Update now / Later**. Update downloads the right .exe for
   the machine's architecture, swaps it in, and relaunches — no installer, no
@@ -109,16 +121,15 @@ SimpleMail distributes itself through **GitHub releases**:
    git tag v1.2.3
    git push origin v1.2.3
    ```
-   GitHub Actions builds `SimpleMail-x64.exe` and creates the release + uploads it.
-4. **From the ARM64 machine** (this one), add the ARM64 build to the same release:
-   ```
-   publish_arm64.bat v1.2.3
-   ```
-5. Every machine running SimpleMail will now see the update prompt on next launch.
+   GitHub Actions runs regression checks and builds both architectures. It checks
+   the executable headers and runs an isolated console-agent smoke check before
+   publishing a release with all four downloads.
+4. Verify the published downloads and the installed app before claiming delivery.
+   Machines running an older SimpleMail version see the update on next launch.
 
 Requirements for the x64 GitHub build (runs on `windows-latest`):
 Python 3.12, pyinstaller, pywebview 5.3.2, pythonnet 3.0.5, bottle, pillow,
-cffi 1.17.1 — all installed by the workflow itself.
+cffi 2.1.1 — all installed by the workflow itself. ARM64 uses `windows-11-arm`.
 
 ## Project layout
 

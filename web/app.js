@@ -199,10 +199,27 @@ async function loadMessages({ quiet = false } = {}) {
   const request = ++view.requests;
   view.loads++;
   try {
-    const res = await api.list_messages(state.activeAccountId, folder.server);
+    const accountId = state.activeAccountId;
+    let res;
+    let localDrafts = [];
+    if (folder.key === "drafts" && api.list_compose_drafts) {
+      const results = await Promise.allSettled([
+        folder.server ? api.list_messages(accountId, folder.server) : Promise.resolve({envelopes: [], unread: 0}),
+        api.list_compose_drafts(accountId),
+      ]);
+      if (results[1].status === "rejected") throw results[1].reason;
+      localDrafts = results[1].value;
+      if (typeof composeRecoveryDrafts === "function") localDrafts = composeRecoveryDrafts(accountId, localDrafts);
+      if (results[0].status === "rejected" && !localDrafts.length) throw results[0].reason;
+      res = results[0].status === "fulfilled" ? results[0].value : {envelopes: [], unread: 0};
+    } else res = await api.list_messages(accountId, folder.server);
     if (view !== mailboxView || request !== view.requests) return;
     const scrollTop = $("msg-list").scrollTop;
-    state.messages = res.envelopes;
+    state.messages = localDrafts.map(draft => ({uid: "local:" + draft.id, localDraftId: draft.id,
+      sender: "Draft · " + (draft.payload.to || "No recipient"), subject: draft.payload.subject || "(no subject)",
+      date: draft.updated_at, seen: true,
+      snippet: draft.status === "pending" ? "Saved on this device · " + draft.payload.body.slice(0, 120)
+        : "Delivery needs checking · Open for details"})).concat(res.envelopes);
     renderMessages();
     $("msg-list").scrollTop = scrollTop;
     // one source of truth: the server's whole-folder count. res.unread only
@@ -250,10 +267,11 @@ function renderMessages() {
         <div class="subject">${escapeHtml(m.subject)}</div>
         <div class="snippet">${escapeHtml(m.snippet || "")}</div>
       </div>`;
-    div.addEventListener("click", () => openMessage(m.uid, div));
+    div.addEventListener("click", () => m.localDraftId ? resumeComposeDraft(m.localDraftId) : openMessage(m.uid, div));
     div.addEventListener("contextmenu", (e) => {
       e.preventDefault();
       e.stopPropagation();  // don't trigger the document-level close
+      if (m.localDraftId) return;
       openCtxMenu(e.clientX, e.clientY, m.uid);
     });
     box.appendChild(div);
@@ -276,6 +294,7 @@ async function openMessage(uid, el) {
     const msg = await mailAction(() => api.get_message(accountId, folder.server, uid));
     if (view !== mailboxView || request !== messageReadRequest) return;
     $("read-header").style.display = "block";
+    if (typeof resetConversation === "function") resetConversation(accountId, uid, msg.message_ref);
     $("read-subject").textContent = msg.subject;
     $("read-meta").innerHTML =
       `<div class="sender-line">${escapeHtml(msg.sender)}</div>` +
@@ -354,10 +373,18 @@ function updateUnreadCount(delta = 0) {
 
 let composeAccountId = null;
 
-function openCompose(to = "", subject = "", quoteHtml = "") {
+function openCompose(to = "", subject = "", quoteHtml = "", options = {}) {
   const acct = activeAccount();
   if (!acct) { toast("Add an account in Settings first", true); return; }
   composeAccountId = acct.id;
+  startComposeSession(acct.id);
+  composeSession.inReplyTo = options.in_reply_to || "";
+  composeSession.references = options.references || "";
+  composeSession.attachments = options.attachments || [];
+  $("compose-cc").value = options.cc || "";
+  $("compose-bcc").value = options.bcc || "";
+  $("compose-copies").open = !!(options.cc || options.bcc);
+  renderComposeAttachments();
   $("compose-from").innerHTML =
     `<span class="acct-dot" style="background:${escapeHtml(acct.color)}"></span>` +
     `${escapeHtml(acct.label)} &lt;${escapeHtml(acct.identity)}&gt;`;
@@ -378,6 +405,7 @@ function openCompose(to = "", subject = "", quoteHtml = "") {
   }
   $("compose-backdrop").classList.add("show");
   $("compose-to").focus();
+  composeChanged();
 }
 
 function composeText() {
@@ -395,16 +423,28 @@ async function sendCompose() {
   const html = composeHtml();
   if (!to) { toast("Enter a recipient", true); return; }
   if (!composeAccountId) { toast("No account bound to this message", true); return; }
+  const session = composeSession;
+  if (!session || session.busy) return;
+  setComposeBusy(session, true);
   $("send-btn").disabled = true;
   $("send-btn").innerHTML = '<span class="spinner"></span> Sending…';
   try {
-    const res = await api.send_mail(composeAccountId, to, subject, text, html);
+    await persistCompose();
+    const res = await api.send_compose_draft(session.accountId, session.id, session.revision);
+    clearComposeRecovery(session);
     $("compose-backdrop").classList.remove("show");
-    toast("Sent as " + (res.sent_as || ""));
+    if (res.status === "uncertain") {
+      toast(res.warning, true);
+      if (state.currentFolder === "drafts") loadMessages();
+      return;
+    }
+    toast("Sent as " + (res.sent_as || "") + (res.sent_copy_saved === false ? "; Sent copy could not be saved" : "") +
+      (res.refused_recipients?.length ? "; some recipients were rejected" : ""));
     if (state.currentFolder === "sent" && composeAccountId === state.activeAccountId) loadMessages();
   } catch (e) {
     toast("Send failed: " + e, true);
   } finally {
+    setComposeBusy(session, false);
     $("send-btn").disabled = false;
     $("send-btn").textContent = "Send";
   }
@@ -416,14 +456,17 @@ async function saveDraft() {
   const text = composeText();
   const html = composeHtml();
   if (!composeAccountId) { toast("No account bound to this message", true); return; }
+  const session = composeSession;
+  if (!session || session.busy) return;
+  setComposeBusy(session, true);
   try {
-    await api.save_draft(composeAccountId, to, subject, text, html);
+    await persistCompose();
     $("compose-backdrop").classList.remove("show");
-    toast("Draft saved");
+    toast("Draft saved on this device");
     if (state.currentFolder === "drafts" && composeAccountId === state.activeAccountId) loadMessages();
   } catch (e) {
     toast("Could not save draft: " + e, true);
-  }
+  } finally { setComposeBusy(session, false); }
 }
 
 /* ---------------- settings ----------------
@@ -644,8 +687,9 @@ async function init() {
   $("compose-btn").addEventListener("click", () => openCompose());
   $("send-btn").addEventListener("click", sendCompose);
   $("draft-btn").addEventListener("click", saveDraft);
-  $("cancel-btn").addEventListener("click", () => $("compose-backdrop").classList.remove("show"));
+  $("cancel-btn").addEventListener("click", discardCompose);
   $("settings-btn").addEventListener("click", openSettings);
+  $("agent-btn").addEventListener("click", openAgent);
   $("settings-save").addEventListener("click", saveSettings);
   $("settings-cancel").addEventListener("click", () => $("settings-backdrop").classList.remove("show"));
   $("test-btn").addEventListener("click", testConnection);
@@ -653,7 +697,8 @@ async function init() {
   $("acct-add-btn").addEventListener("click", addAccount);
   $("acct-remove-btn").addEventListener("click", removeAccount);
   $("delete-btn").addEventListener("click", deleteSelected);
-  $("reply-btn").addEventListener("click", replyTo);
+  $("reply-btn").addEventListener("click", () => replyTo(false));
+  $("reply-all-btn").addEventListener("click", () => replyTo(true));
   $("forward-btn").addEventListener("click", forwardMessage);
   $("unread-btn").addEventListener("click", markUnread);
   $("markall-btn").addEventListener("click", markAllRead);
@@ -674,7 +719,8 @@ async function init() {
   window.addEventListener("blur", closeCtxMenu);
   document.addEventListener("keydown", (e) => {
     if (e.key === "Escape") {
-      $("compose-backdrop").classList.remove("show");
+      if ($("agent-backdrop").classList.contains("show")) return;
+      if ($("compose-backdrop").classList.contains("show")) { closeCompose(); return; }
       $("settings-backdrop").classList.remove("show");
     }
   });
@@ -702,7 +748,7 @@ async function init() {
 
 async function markAllRead() {
   const folder = state.folders.find((f) => f.key === state.currentFolder);
-  if (!folder) return;
+  if (!folder || !folder.server) return;
   const view = mailboxView;
   try {
     const res = await mailAction(() => api.mark_all_read(state.activeAccountId, folder.server));
@@ -758,24 +804,31 @@ async function deleteSelected() {
   }
 }
 
-function replyTo() {
+async function replyTo(replyAll = false) {
   const m = state.messages.find((x) => x.uid === state.selectedUid);
   if (!m) return;
-  let to = m.sender;
-  const addr = m.sender.match(/<([^>]+)>/);
-  if (addr) to = addr[1];
-  let subject = m.subject;
-  if (!/^re:/i.test(subject)) subject = "Re: " + subject;
-  quoteOriginal(m).then((quote) => openCompose(to, subject, quote));
+  await openCorrespondence(m, false, replyAll);
 }
 
 async function forwardMessage() {
   const m = state.messages.find((x) => x.uid === state.selectedUid);
   if (!m) return;
-  let subject = m.subject;
-  if (!/^fwd?:/i.test(subject)) subject = "Fwd: " + subject;
-  const quote = await quoteOriginal(m);
-  openCompose("", subject, quote);
+  await openCorrespondence(m, true, false);
+}
+
+async function openCorrespondence(message, forward, replyAll) {
+  const accountId = state.activeAccountId;
+  const view = mailboxView;
+  const folder = state.folders.find(f => f.key === state.currentFolder);
+  try {
+    const context = await api.get_compose_context(accountId, folder.server, message.uid, replyAll, forward);
+    if (view !== mailboxView || accountId !== state.activeAccountId || message.uid !== state.selectedUid) return;
+    let subject = context.subject;
+    if (forward ? !/^fwd?:/i.test(subject) : !/^re:/i.test(subject)) subject = (forward ? "Fwd: " : "Re: ") + subject;
+    const quote = `<div><i>On ${escapeHtml(context.date)}, ${escapeHtml(shortFrom(context.sender))} wrote:</i></div>` +
+      `<pre style="white-space:pre-wrap">${escapeHtml(context.text)}</pre>`;
+    openCompose(forward ? "" : context.to, subject, quote, context);
+  } catch (error) { toast("Could not prepare message: " + error, true); }
 }
 
 async function quoteOriginal(m) {
@@ -783,8 +836,10 @@ async function quoteOriginal(m) {
   const folder = state.folders.find((f) => f.key === state.currentFolder);
   try {
     const msg = await api.get_message(state.activeAccountId, folder.server, m.uid);
-    const src = msg.html || `<pre>${escapeHtml(msg.text || "")}</pre>`;
-    const fromLine = `On ${msg.date}, ${escapeHtml(shortFrom(msg.sender))} wrote:`;
+    // Quotes live in the editable main document, outside the reader sandbox.
+    // Use escaped text so incoming HTML can never execute beside the GUI bridge.
+    const src = `<pre style="white-space:pre-wrap">${escapeHtml(msg.text || "")}</pre>`;
+    const fromLine = `On ${escapeHtml(msg.date)}, ${escapeHtml(shortFrom(msg.sender))} wrote:`;
     return `<div><i>${fromLine}</i></div>${src}`;
   } catch {
     return `<div><i>Original message</i></div>`;
@@ -804,7 +859,7 @@ function openCtxMenu(x, y, uid) {
   const dom = msg ? (msg.sender.match(/<([^>]+)>/) || [msg.sender, msg.sender])[1].split("@")[1] || "" : "";
   let html = `<div class="ctx-head">${escapeHtml(sender)}<br><span style="font-weight:400">${escapeHtml(dom || "")}</span></div>`;
   state.folders.forEach((f) => {
-    if (f.server === current.server) return;  // skip current folder
+    if (!f.server || f.server === current.server) return;  // only server-side move targets
     const colors = { inbox: "#2563eb", sent: "#059669", drafts: "#d97706", junk: "#dc2626", trash: "#6b7280" };
     const color = colors[f.key] || "#8b5cf6";
     html += `<div class="ctx-item" data-act="move" data-target="${escapeHtml(f.server)}">

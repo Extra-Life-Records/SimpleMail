@@ -52,7 +52,7 @@ else:
     _WEBVIEW_IMPORT_ERROR = None
 
 APP_NAME = "SimpleMail"
-APP_VERSION = "1.2.0"
+APP_VERSION = "1.3.0"
 APP_REPO = "Extra-Life-Records/SimpleMail"  # owner/repo for auto-updates
 CONFIG_DIR = Path(os.environ.get("APPDATA", str(Path.home()))) / APP_NAME
 CONFIG_FILE = CONFIG_DIR / "config.json"
@@ -554,25 +554,39 @@ def html_to_text(html):
     return text.strip() or "(empty html message)"
 
 
-def send_message(acct, to, subject, body, body_html=None, save_sent=True):
+def send_message(acct, to, subject, body, body_html=None, save_sent=True,
+                 cc="", bcc="", in_reply_to="", references="", message_id=None, attachments=None):
     """Send via the ACCOUNT'S OWN SMTP as the ACCOUNT'S OWN identity, then
     append a copy to that same account's Sent folder.
 
     The From address is derived here from the account and nowhere else -
     callers cannot supply one, so a message can never leave a mailbox under
     another account's identity."""
-    from email.utils import formataddr
+    from email.utils import formataddr, formatdate, make_msgid
 
     msg = EmailMessage()
     sender = from_address(acct)
     msg["From"] = formataddr((acct.get("label") or "", sender)) if acct.get("label") else sender
     msg["To"] = to
+    if cc:
+        msg["Cc"] = cc
+    if bcc:
+        msg["Bcc"] = bcc
     msg["Subject"] = subject
+    msg["Date"] = formatdate(localtime=True)
+    msg["Message-ID"] = message_id or make_msgid()
+    if in_reply_to:
+        msg["In-Reply-To"] = in_reply_to
+    if references:
+        msg["References"] = references
     if body_html:
         msg.set_content(body or "")
         msg.add_alternative(body_html, subtype="html")
     else:
         msg.set_content(body or "")
+    for attachment in attachments or []:
+        maintype, subtype = attachment["content_type"].split("/", 1)
+        msg.add_attachment(attachment["data"], maintype=maintype, subtype=subtype, filename=attachment["name"])
     smtp_user, smtp_password = smtp_credentials(acct)
     with smtplib.SMTP(acct["smtp_host"], int(acct["smtp_port"]), timeout=30) as smtp:
         smtp.ehlo()
@@ -580,17 +594,24 @@ def send_message(acct, to, subject, body, body_html=None, save_sent=True):
             smtp.starttls()
             smtp.ehlo()
         smtp.login(smtp_user, smtp_password)
-        smtp.send_message(msg)
+        refused = smtp.send_message(msg)
+    # SMTP strips Bcc on transmission; the Sent copy must also omit it.
+    if "Bcc" in msg:
+        del msg["Bcc"]
+    sent_copy_saved = False
     if save_sent:
         try:
             imap, folders, sent_flag = connect_imap(acct)
             try:
                 sent = pick_sent_folder(folders, sent_flag)
-                imap.append(sent, r"(\Seen)", None, msg.as_bytes())
+                typ, _ = imap.append(sent, r"(\Seen)", None, msg.as_bytes())
+                sent_copy_saved = typ == "OK"
             finally:
                 imap.logout()
         except Exception:
             pass  # sent copy is best-effort; the mail itself went out
+    return {"smtp_accepted": True, "sent_copy_saved": sent_copy_saved,
+            "refused_recipients": list(refused or {}), "message_id": str(msg["Message-ID"])}
 
 
 def save_draft_message(acct, to, subject, body, body_html=None):
@@ -1113,6 +1134,8 @@ class Api:
             except Exception as e:
                 folders = [{"key": "inbox", "name": "Inbox", "server": "INBOX", "unread": 0}]
                 error = str(e)
+        if not any(folder["key"] == "drafts" for folder in folders):
+            folders.insert(min(2, len(folders)), {"key": "drafts", "name": "Drafts", "server": None, "unread": 0})
         return {"folders": folders, "error": error}
 
     def set_active_account(self, account_id):
@@ -1190,17 +1213,217 @@ class Api:
         acct = self._acct(account_id)
         imap, _, _ = connect_imap(acct)
         try:
-            return fetch_message(imap, server_folder, uid)
+            result = fetch_message(imap, server_folder, uid)
+            result["message_ref"] = None
+            try:
+                from mailbox_agent import pack
+                _, data = imap.response("UIDVALIDITY")
+                if data and isinstance(data[0], bytes) and data[0].isdigit():
+                    result["message_ref"] = pack({"account": account_id, "folder": server_folder,
+                                                  "validity": data[0].decode(), "uid": str(uid)})
+            except (ValueError, TypeError):
+                pass
+            return result
         finally:
             imap.logout()
+
+    def get_conversation(self, account_id, message_ref, cursor=None):
+        from mailbox_agent import MailboxAgent
+        self._acct(account_id)
+        owner = MailboxAgent(self.cfg, self._agent_store(), account_id, owner_access=True)
+        return owner.thread(message_ref, cursor=cursor, limit=5, max_chars=10000)
 
     def send_mail(self, account_id, to, subject, body, body_html=None):
         """Send as the given account. The From identity comes from the
         account config alone - there is deliberately no from parameter."""
         self._log(f"CALL send_mail {account_id} to={to} subject={subject[:40]}")
         acct = self._acct(account_id)
-        send_message(acct, to, subject, body, body_html=body_html)
-        return {"ok": True, "sent_as": from_address(acct)}
+        result = send_message(acct, to, subject, body, body_html=body_html)
+        return {"ok": True, "sent_as": from_address(acct), **result}
+
+    def _agent_store(self):
+        from agent_store import AgentStore
+        return AgentStore(CONFIG_DIR / "agent" / "mailbox.sqlite3")
+
+    def _compose_store(self):
+        from compose_store import ComposeStore
+        return ComposeStore(CONFIG_DIR / "agent" / "mailbox.sqlite3")
+
+    def _attachment_store(self):
+        from mail_attachments import AttachmentStore
+        return AttachmentStore(CONFIG_DIR / "agent" / "mailbox.sqlite3")
+
+    def add_compose_attachment(self, account_id, name, encoded):
+        self._acct(account_id)
+        return self._attachment_store().add_base64(account_id, name, encoded)
+
+    def get_compose_context(self, account_id, server_folder, uid, reply_all=False, forward=False):
+        from mail_attachments import reply_context, MAX_TOTAL
+        from mailbox_agent import clean_string
+        acct = self._acct(account_id)
+        clean_string(server_folder, "folder", 500)
+        if not isinstance(uid, str) or not uid.isdigit():
+            raise ValueError("Invalid message UID")
+        imap, _, _ = connect_imap(acct)
+        try:
+            quoted = '"' + server_folder.replace('\\', '\\\\').replace('"', '\\"') + '"'
+            typ, _ = imap.select(quoted, readonly=True)
+            if typ != "OK":
+                raise ValueError("Folder unavailable")
+            typ, data = imap.uid("fetch", uid, "(RFC822.SIZE)")
+            size = re.search(rb'RFC822.SIZE (\d+)', b' '.join(item for item in data or [] if isinstance(item, bytes)))
+            if typ != "OK" or not size or int(size[1]) > 30 * 1024 * 1024:
+                raise ValueError("Message is unavailable or too large to quote (30 MB limit)")
+            typ, data = imap.uid("fetch", uid, "(BODY.PEEK[])")
+            raw = next((item[1] for item in data or [] if isinstance(item, tuple)), None)
+            if typ != "OK" or raw is None or len(raw) > 30 * 1024 * 1024:
+                raise ValueError("Message could not be read")
+            msg = message_from_bytes(raw, policy=email_policy)
+        finally:
+            imap.logout()
+        text, _ = extract_bodies(msg)
+        attachments = []
+        if forward:
+            parts = [part for part in msg.walk() if part.get_filename()]
+            contents = [(part, part.get_payload(decode=True) or b'') for part in parts]
+            if sum(len(content) for _, content in contents) > MAX_TOTAL:
+                raise ValueError("Forwarded attachments exceed the 20 MB limit")
+            store = self._attachment_store()
+            for part, content in contents:
+                name = (part.get_filename() or 'attachment').replace('\\', '/').rsplit('/', 1)[-1]
+                attachments.append(store.add(account_id, name, content))
+        context = {} if forward else reply_context(msg, [acct["email"], from_address(acct)], reply_all)
+        return {**context, "subject": str(msg.get("Subject", "")), "sender": str(msg.get("From", "")),
+                "date": str(msg.get("Date", "")), "text": text, "attachments": attachments}
+
+    def save_compose_draft(self, account_id, draft_id, revision, to, subject, body, body_html,
+                           cc="", bcc="", in_reply_to="", references="", attachment_ids=None):
+        from mailbox_agent import clean_string
+        self._acct(account_id)
+        clean_string(to, "recipients", 4000)
+        clean_string(subject, "subject", 1000)
+        for value, name in ((cc, "CC"), (bcc, "BCC"), (in_reply_to, "reply header"), (references, "references")):
+            clean_string(value, name, 10000)
+        attachment_ids = attachment_ids or []
+        if attachment_ids:
+            self._attachment_store().resolve(account_id, attachment_ids)
+        if any(not isinstance(value, str) or len(value) > 500000 or '\x00' in value
+               for value in (body, body_html)):
+            raise ValueError("Invalid draft body")
+        return self._compose_store().save(account_id, draft_id, revision,
+                {"to": to, "subject": subject, "body": body, "body_html": body_html,
+                 "cc": cc, "bcc": bcc, "in_reply_to": in_reply_to, "references": references,
+                 "attachment_ids": attachment_ids})
+
+    def list_compose_drafts(self, account_id):
+        self._acct(account_id)
+        return self._compose_store().list(account_id)
+
+    def get_compose_draft(self, account_id, draft_id):
+        self._acct(account_id)
+        draft = self._compose_store().get(account_id, draft_id)
+        items = self._attachment_store().resolve(account_id, draft["payload"].get("attachment_ids", []))
+        draft["attachments"] = [{"id": item["id"], "name": item["name"], "size": len(item["data"])} for item in items]
+        return draft
+
+    def discard_compose_draft(self, account_id, draft_id, revision):
+        self._acct(account_id)
+        return self._compose_store().discard(account_id, draft_id, revision)
+
+    def send_compose_draft(self, account_id, draft_id, revision):
+        from mailbox_agent import recipients
+        acct = self._acct(account_id)
+        store = self._compose_store()
+        payload = store.get(account_id, draft_id)["payload"]
+        if not payload["to"].strip():
+            raise ValueError("Enter a recipient before sending")
+        recipients(payload["to"])
+        recipients(payload.get("cc", ""))
+        recipients(payload.get("bcc", ""))
+        attachments = self._attachment_store().resolve(account_id, payload["attachment_ids"]) if payload.get("attachment_ids") else []
+        draft = store.claim(account_id, draft_id, revision)
+        payload = draft["payload"]
+        try:
+            result = send_message(acct, payload["to"], payload["subject"] or "(no subject)",
+                                  payload["body"], body_html=payload["body_html"], cc=payload.get("cc", ""),
+                                  bcc=payload.get("bcc", ""), in_reply_to=payload.get("in_reply_to", ""),
+                                  references=payload.get("references", ""), attachments=attachments)
+        except Exception:
+            detail = {"warning": "Delivery could not be confirmed. Check the mailbox before sending again. "
+                      "This draft will not be retried automatically."}
+            store.finish(account_id, draft_id, "uncertain", detail)
+            return {"status": "uncertain", **detail}
+        store.finish(account_id, draft_id, "sent", result)
+        return {"status": "sent", "sent_as": from_address(acct), **result}
+
+    def get_agent_state(self, account_id):
+        self._acct(account_id)
+        store = self._agent_store()
+        drafts = self.list_agent_drafts(account_id)
+        return {"profile": store.profile(account_id), "drafts": drafts,
+                "activity": store.activity(account_id)}
+
+    def save_agent_settings(self, account_id, enabled, job, mode=None, allowed_recipients=None):
+        self._acct(account_id)
+        if enabled and not job.strip():
+            raise ValueError("Write the agent's job first")
+        return self._agent_store().set_profile(account_id, enabled, job, mode, allowed_recipients)
+
+    def list_agent_drafts(self, account_id, cursor=None):
+        self._acct(account_id)
+        drafts = self._agent_store().list_drafts(account_id, cursor)
+        for draft in drafts["items"]:
+            ids = draft["payload"].get("attachment_ids", [])
+            items = self._attachment_store().resolve(account_id, ids) if ids else []
+            draft["attachments"] = [{"name": item["name"], "size": len(item["data"])} for item in items]
+        return drafts
+
+    def list_agent_activity(self, account_id, cursor=None):
+        self._acct(account_id)
+        return self._agent_store().activity(account_id, cursor)
+
+    def edit_agent_draft(self, account_id, draft_id, revision, to, subject, body, cc="", bcc=""):
+        from mailbox_agent import clean_string, recipients
+        self._acct(account_id)
+        store = self._agent_store()
+        draft = store.get_draft(account_id, draft_id)
+        payload = draft["payload"]
+        payload.update(to=recipients(to), subject=clean_string(subject, "subject", 1000),
+                       cc=recipients(cc), bcc=recipients(bcc))
+        if not isinstance(body, str) or len(body) > 200000 or '\x00' in body:
+            raise ValueError("Invalid message body")
+        payload["body"] = body
+        return store.save_draft(account_id, draft["request_key"], payload, draft_id, revision)
+
+    def dismiss_agent_draft(self, account_id, draft_id, revision):
+        self._acct(account_id)
+        return self._agent_store().dismiss_draft(account_id, draft_id, revision)
+
+    def send_agent_draft(self, account_id, draft_id, revision):
+        """Owner-only GUI action. Never exposed through the MCP tool server."""
+        from email.utils import make_msgid
+        acct = self._acct(account_id)
+        store = self._agent_store()
+        candidate = store.get_draft(account_id, draft_id)
+        if not candidate["payload"]["to"].strip():
+            raise ValueError("Enter a recipient before sending")
+        ids = candidate["payload"].get("attachment_ids", [])
+        attachments = self._attachment_store().resolve(account_id, ids) if ids else []
+        draft = store.claim_send(account_id, draft_id, revision)
+        payload = draft["payload"]
+        message_id = make_msgid()
+        try:
+            result = send_message(acct, payload["to"], payload["subject"], payload["body"],
+                                  cc=payload.get("cc", ""), bcc=payload.get("bcc", ""),
+                                  in_reply_to=payload.get("in_reply_to", ""),
+                                  references=payload.get("references", ""), message_id=message_id, attachments=attachments)
+        except Exception:
+            detail = {"message_id": message_id, "warning": "Delivery could not be confirmed. "
+                      "Check the mailbox before sending again; this draft will not be retried automatically."}
+            store.finish_send(account_id, draft_id, "uncertain", detail)
+            return {"status": "uncertain", **detail}
+        store.finish_send(account_id, draft_id, "sent", result)
+        return {"status": "sent", "sent_as": from_address(acct), **result}
 
     def save_draft(self, account_id, to, subject, body, body_html=None):
         self._log(f"CALL save_draft {account_id} subject={subject[:40]}")

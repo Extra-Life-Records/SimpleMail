@@ -351,24 +351,27 @@ finally:
 # T6: live GitHub check - latest release must carry this machine's arch asset
 # ---------------------------------------------------------------------------
 
-try:
-    info = m.check_for_update()
-    if info is None:
-        check("T6: live latest release found", False, "check_for_update returned None")
-    else:
-        check("T6: live latest release found", True, info["tag"])
-        have_asset = info["asset_url"] is not None
-        check(f"T6: release {info['tag']} has a {info['arch']} asset", have_asset)
-        if have_asset:
-            req = urllib.request.Request(info["asset_url"], method="HEAD",
-                                         headers={"User-Agent": "SimpleMail/tests"})
-            with urllib.request.urlopen(req, timeout=30) as r:
-                check("T6: asset URL downloads (200)", r.status == 200, str(r.status))
-except Exception as e:
-    if LIVE:
-        check("T6: live GitHub check", False, str(e))
-    else:
-        print(f"SKIP  T6: live GitHub check (offline? {e}) - rerun with --live")
+if LIVE:
+    try:
+        info = m.check_for_update()
+        if info is None:
+            check("T6: live latest release found", False, "check_for_update returned None")
+        else:
+            check("T6: live latest release found", True, info["tag"])
+            have_asset = info["asset_url"] is not None
+            check(f"T6: release {info['tag']} has a {info['arch']} asset", have_asset)
+            if have_asset:
+                req = urllib.request.Request(info["asset_url"], method="HEAD",
+                                             headers={"User-Agent": "SimpleMail/tests"})
+                with urllib.request.urlopen(req, timeout=30) as r:
+                    check("T6: asset URL downloads (200)", r.status == 200, str(r.status))
+    except Exception as e:
+        if LIVE:
+            check("T6: live GitHub check", False, str(e))
+        else:
+            print(f"SKIP  T6: live GitHub check (offline? {e}) - rerun with --live")
+else:
+    print("SKIP  T6: published-release check; run --live after publication")
 
 # ---------------------------------------------------------------------------
 # TF-live (--live only): REAL locked-file swap - a child process holds the
