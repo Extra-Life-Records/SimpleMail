@@ -17,7 +17,7 @@ review, and main Inbox / Needs you / Activity navigation. See [connection instru
 owner's x64 machine and is published with native x64 and ARM64 downloads.
 
 - ✅ **Inbox, Needs you, Activity** — main navigation; other mail folders are under Folders
-- ✅ **Real HTML email rendering** (sandboxed iframe, scripts stripped)
+- ✅ **Real HTML email rendering** (sandboxed; remote images blocked until Load images)
 - ✅ **Compose with signature** — set it once in Settings, auto-appended
 - ✅ **Automatic local draft saving and recovery**; keep or discard
   drafts and resume them from Drafts after restarting. New human drafts are saved

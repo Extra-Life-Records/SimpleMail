@@ -302,3 +302,18 @@ paused, uncertain-send retry prevention, main view switching, and preserving
 unsaved job edits when discard is declined. Three routing regression tests cover
 late responses, competing requests, busy actions and unsaved drafts. Publication
 and installed verification of this build remain pending at this checkpoint.
+
+### Navigation delivery and message image privacy
+
+v1.5.0 is merged, published for both architectures and installed on the owner's
+x64 machine. Installed WebView2 checks prove direct Inbox/Needs you/Activity
+navigation, paused owner review, account isolation, retained model setup and
+unchanged permissions. Normal relaunch removed the temporary debugging listener.
+
+The v1.5.1 source blocks remote message resources by default, uses inert template
+parsing, a restrictive message Content Security Policy, and strips CSS resource
+channels. Load images appears only for messages containing remote pictures;
+permission lasts for that selected message. Embedded raster images remain usable.
+Chromium tests observe zero default remote requests, one permitted picture,
+blocked CSS/media/SVG channels, safe links, permission reset and stale-control
+protection. The browser test now runs in CI. Installed delivery remains pending.

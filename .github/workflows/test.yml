@@ -23,3 +23,13 @@ jobs:
       - run: python tests/test_updater.py
       - run: python -m unittest discover -s tests -p "test_*.py"
       - run: node --test tests/test_mail_refresh.js tests/test_compose_recovery.js tests/test_conversation.js tests/test_agent_navigation.js
+      - name: Verify email privacy in Chromium
+        run: |
+          $privacyRuntime = Join-Path $env:RUNNER_TEMP 'simplemail-browser-tests'
+          npm install --prefix $privacyRuntime --no-audit --no-fund playwright@1.62.1
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $env:SIMPLEMAIL_PLAYWRIGHT_MODULE = Join-Path $privacyRuntime 'node_modules/playwright'
+          & (Join-Path $privacyRuntime 'node_modules/.bin/playwright.cmd') install chromium
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          node tests/email_privacy_browser.cjs
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
