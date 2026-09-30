@@ -53,9 +53,70 @@ class WorkTests(unittest.TestCase):
             self.add(uid)
         return sync_inbox(self.agent, self.queue, include_existing=True)
 
+    def review_item(self):
+        self.queue_mail()
+        work = self.queue.claim('one')['work']
+        self.queue.finish('one', work['id'], work['lease_token'], 'needs_owner', 'Missing facts')
+        return self.queue.owner_reviews('one')['items'][0]
+
+    def test_owner_review_available_when_paused_without_lease_token(self):
+        item = self.review_item()
+        self.queue.set_profile('one', False, 'Paused')
+        self.assertEqual(len(self.queue.owner_reviews('one')['items']), 1)
+        self.assertNotIn('lease_token', self.queue.owner_work('one', item['id']))
+        self.assertEqual(self.queue.owner_reviews('other')['items'], [])
+        with self.assertRaises(ValueError):
+            self.queue.owner_work('other', item['id'])
+
+    def test_owner_retry_does_not_enable_paused_mailbox(self):
+        item = self.review_item()
+        self.queue.set_profile('one', False, 'Paused')
+        self.assertEqual(self.queue.owner_resolve('one', item['id'], item['updated_at'], 'retry')['status'], 'pending')
+        self.assertFalse(self.queue.profile('one')['enabled'])
+        with self.assertRaises(ValueError):
+            self.queue.claim('one')
+
+    def test_stale_or_cross_account_review_cannot_resolve(self):
+        item = self.review_item()
+        with self.assertRaises(ValueError):
+            self.queue.owner_resolve('other', item['id'], item['updated_at'], 'handled')
+        self.queue.owner_resolve('one', item['id'], item['updated_at'], 'handled')
+        with self.assertRaises(ValueError):
+            self.queue.owner_resolve('one', item['id'], item['updated_at'], 'retry')
+
+    def test_existing_draft_blocks_owner_retry_and_pending_resolution(self):
+        item = self.review_item()
+        draft = self.queue.save_draft('one',item['request_key'],{'to':'person@example.com','subject':'Reply','body':'Draft'})
+        listed = self.queue.owner_reviews('one')['items'][0]
+        self.assertEqual(listed['draft_id'], draft['id'])
+        for action in ('retry','handled'):
+            with self.assertRaises(ValueError):
+                self.queue.owner_resolve('one',item['id'],item['updated_at'],action)
+        self.queue.dismiss_draft('one',draft['id'],draft['revision'])
+        self.queue.owner_resolve('one',item['id'],item['updated_at'],'handled')
+
+    def test_uncertain_delivery_cannot_be_reprocessed(self):
+        item = self.review_item()
+        draft = self.queue.save_draft('one',item['request_key'],{'to':'person@example.com','subject':'Reply','body':'Draft'})
+        self.queue.claim_send('one',draft['id'],draft['revision'])
+        self.queue.finish_send('one',draft['id'],'uncertain',{'warning':'Delivery unknown'})
+        with self.assertRaises(ValueError):
+            self.queue.owner_resolve('one',item['id'],item['updated_at'],'retry')
+
+    def test_owner_review_pagination_is_account_scoped(self):
+        self.queue_mail(3)
+        for _ in range(3):
+            work = self.queue.claim('one')['work']
+            self.queue.finish('one',work['id'],work['lease_token'],'needs_owner','Review')
+        page = self.queue.owner_reviews('one',limit=2)
+        rest = self.queue.owner_reviews('one',page['next_cursor'],limit=2)
+        self.assertEqual(len(page['items'])+len(rest['items']),3)
+        self.assertFalse(set(x['id'] for x in page['items']) & set(x['id'] for x in rest['items']))
+
     def test_baseline_ignores_backlog_then_queues_new_arrival(self):
         self.add(1)
         self.assertTrue(sync_inbox(self.agent, self.queue)["baseline"])
+
         self.assertIsNone(self.queue.claim("one")["work"])
         self.add(2)
         self.assertEqual(sync_inbox(self.agent, self.queue)["queued"], 1)

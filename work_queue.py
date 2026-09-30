@@ -152,6 +152,55 @@ class WorkQueue(AgentStore):
             item.pop("lease_token", None)  # Listing must not let another consumer complete a claim.
         return {"items": items, "next_cursor": items[-1]["id"] if len(rows) > limit else None}
 
+    def owner_reviews(self, account, before=None, limit=25):
+        """Owner-only view remains available while agent access is paused."""
+        with self.connect() as db:
+            rows = db.execute("SELECT * FROM mail_work WHERE account_id=? AND status='needs_owner' "
+                              "AND (? IS NULL OR id<?) ORDER BY id DESC LIMIT ?",
+                              (account, before, before, limit + 1)).fetchall()
+            items = []
+            for row in rows:
+                item = self.item(row)
+                item.pop('lease_token', None)
+                draft = db.execute("SELECT id,status FROM drafts WHERE account_id=? AND request_key=?",
+                                   (account, item['request_key'])).fetchone()
+                item['draft_id'] = draft['id'] if draft else None
+                item['draft_status'] = draft['status'] if draft else None
+                items.append(item)
+        return {'items': items[:limit], 'next_cursor': items[limit-1]['id'] if len(items) > limit else None}
+
+    def owner_work(self, account, work_id):
+        with self.connect() as db:
+            row = db.execute("SELECT * FROM mail_work WHERE account_id=? AND id=?", (account, work_id)).fetchone()
+        if not row:
+            raise ValueError("This review item is unavailable")
+        item = self.item(row)
+        item.pop('lease_token', None)
+        return item
+
+    def owner_resolve(self, account, work_id, updated_at, action):
+        if action not in ('handled', 'retry'):
+            raise ValueError("Choose handled or retry")
+        with self.connect() as db:
+            db.execute('BEGIN IMMEDIATE')
+            row = db.execute("SELECT * FROM mail_work WHERE account_id=? AND id=? AND status='needs_owner' "
+                             "AND updated_at=?", (account, work_id, updated_at)).fetchone()
+            if not row:
+                raise ValueError("This review item changed; reload before deciding")
+            draft = db.execute("SELECT status FROM drafts WHERE account_id=? AND request_key=?",
+                               (account, f'work-{work_id}')).fetchone()
+            if action == 'retry' and draft:
+                raise ValueError("Review the existing draft or delivery outcome; do not repeat processing")
+            if action == 'handled' and draft and draft['status'] == 'pending':
+                raise ValueError("Send or dismiss the existing draft before resolving this item")
+            status = 'pending' if action == 'retry' else 'handled'
+            note = 'Owner requested another attempt' if action == 'retry' else 'Reviewed by owner; no further action'
+            db.execute("UPDATE mail_work SET status=?,note=?,attempts=0,available_at=0,lease_token=NULL,"
+                       "lease_until=NULL,updated_at=? WHERE id=? AND account_id=?",
+                       (status, note, now(), work_id, account))
+            self._event(db, account, 'owner_work_' + action, {'work_id': work_id, 'note': note})
+        return {'status': status}
+
 
 def sync_inbox(mailbox, queue, include_existing=False):
     """Read at most 50 new headers per pass. Never mark mail read or fetch bodies."""

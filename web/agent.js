@@ -69,6 +69,7 @@ function renderAgent() {
     renderAgentDraft();
     return;
   }
+  if (view.review) { renderAgentReview(); return; }
   if (view.tab === "job") {
     box.innerHTML = `<p>Give this mailbox a job. Choose a model below or connect an external agent to read mail and prepare replies here.</p>
       <label for="agent-job">What should the agent handle?</label>
@@ -122,17 +123,43 @@ function renderAgent() {
       `<div class="agent-card"><h3>${escapeHtml(draft.payload.subject || "(no subject)")}</h3>
        <p class="agent-muted">To: ${escapeHtml(draft.payload.to || "No recipient yet")}</p>
        <p>${escapeHtml(draft.payload.reason)}</p><button class="outline" data-review="${index}">Review draft</button></div>`
-    ).join("") : `<p>No drafts waiting for you.</p><p class="agent-muted">Replies prepared by a connected agent appear here.</p>`;
+    ).join("") : "";
     box.querySelectorAll("[data-review]").forEach(button => {
       button.onclick = () => { view.draft = drafts.items[Number(button.dataset.review)]; renderAgent(); };
     });
     addAgentMore(box, drafts.next_cursor, "drafts");
+    const reviews = view.data.reviews || {items:[],next_cursor:null};
+    const unresolved = reviews.items.filter(item => item.draft_status !== "pending");
+    if (!drafts.items.length && !unresolved.length) box.innerHTML = "<p>Nothing needs your attention.</p>";
+    unresolved.forEach(item => {
+      const card = document.createElement("div"); card.className = "agent-card";
+      card.innerHTML = `<h3>${escapeHtml(item.headers.subject || "Message needs review")}</h3>
+        <p class="agent-muted">${escapeHtml(item.headers.sender || "")}</p><p>${escapeHtml(item.note)}</p>
+        <button class="outline">Review message</button>`;
+      card.querySelector("button").onclick = () => runAgentAction(async current => {
+        current.review = await api.get_agent_review(current.accountId, item.id);
+        current.review.draft_id = item.draft_id;
+        current.review.draft_status = item.draft_status;
+      });
+      box.appendChild(card);
+    });
+    if (reviews.next_cursor) {
+      const more = document.createElement("button"); more.className = "outline"; more.textContent = "More messages needing review";
+      more.onclick = () => runAgentAction(async current => {
+        const page = await api.list_agent_reviews(current.accountId, reviews.next_cursor);
+        current.data.reviews.items.push(...page.items); current.data.reviews.next_cursor = page.next_cursor;
+      });
+      box.appendChild(more);
+    }
   } else {
     const names = { settings: "Job or access changed", draft_created: "Draft prepared", draft_updated: "Draft edited",
                     draft_dismissed: "Draft dismissed", send_started: "Sending reply", send_sent: "Reply accepted by mail server",
-                    send_uncertain: "Delivery needs checking" };
+                    send_uncertain: "Delivery needs checking", work_claimed: "Reading incoming mail",
+                    work_handled: "Message handled", work_waiting: "Waiting for a reply", work_needs_owner: "Needs your attention",
+                    work_retry: "Another attempt scheduled", owner_work_retry: "You requested another attempt",
+                    owner_work_handled: "Reviewed by you", inbox_recreated: "Inbox identity changed" };
     box.innerHTML = view.data.activity.items.length ? view.data.activity.items.map(item => {
-      let detail = item.detail.reason || item.detail.subject || "";
+      let detail = item.detail.reason || item.detail.subject || item.detail.note || "";
       if (item.kind === "send_uncertain") detail = item.detail.warning;
       if (item.kind === "send_sent") {
         detail = item.detail.sent_copy_saved ? "Saved in Sent." : "Sent copy could not be saved.";
@@ -143,6 +170,29 @@ function renderAgent() {
     }).join("") : "<p>No agent activity yet.</p>";
     addAgentMore(box, view.data.activity.next_cursor, "activity");
   }
+}
+
+function renderAgentReview() {
+  const review = agentView.review;
+  const {work, message} = review;
+  const box = $("agent-content");
+  box.innerHTML = `<h3>${escapeHtml(message.subject || "(no subject)")}</h3>
+    <p class="agent-muted">From: ${escapeHtml(message.sender)}</p><p>${escapeHtml(work.note)}</p>
+    <pre style="white-space:pre-wrap;overflow-wrap:anywhere;font:inherit;padding:12px">${escapeHtml(message.text)}</pre>
+    ${message.truncated ? '<p class="agent-muted">Message preview shortened.</p>' : ''}
+    ${review.draft_id ? '<p class="agent-muted">This message has an existing draft or delivery outcome. Check it before resolving; another model attempt is blocked.</p>' : ''}
+    <div class="agent-actions"><button id="agent-review-handled">Mark handled</button>
+    ${!review.draft_id ? '<button class="outline" id="agent-review-retry">Ask AI to try again</button>' : ''}
+    <button class="outline" id="agent-review-back">Back</button></div>
+    <p class="agent-muted">Trying again queues this message. A paused agent stays paused.</p>`;
+  const resolve = action => runAgentAction(async current => {
+    await api.resolve_agent_review(current.accountId, work.id, work.updated_at, action);
+    current.review = null; current.data = await api.get_agent_state(current.accountId);
+    toast(action === "retry" ? "Queued for another attempt; start the agent when ready" : "Marked handled");
+  });
+  $("agent-review-handled").onclick = () => resolve("handled");
+  if ($("agent-review-retry")) $("agent-review-retry").onclick = () => resolve("retry");
+  $("agent-review-back").onclick = () => { agentView.review = null; renderAgent(); };
 }
 
 function addAgentMore(box, cursor, tab) {
@@ -274,6 +324,7 @@ document.querySelectorAll("[data-agent-tab]").forEach(button => {
     if (!agentView || agentView.busy || !agentDiscardAllowed()) return;
     agentView.tab = button.dataset.agentTab;
     agentView.draft = null;
+    agentView.review = null;
     if (agentView.tab === "job") renderAgent();
     else await runAgentAction(async view => { view.data = await api.get_agent_state(view.accountId); });
   });

@@ -224,16 +224,29 @@ class ModelWorker:
             history = self.model.start(INSTRUCTIONS + "\nOwner configuration:\n" + json.dumps(identity), task)
             count = 0
             read_complete = False
+            completing = False
             for _ in range(self.max_turns):
                 self.check(work, profile, account)
                 if self.clock() >= deadline:
                     raise ModelError("Model run reached its time limit; owner review required")
                 tools = [item for item in self.server.available_tools() if not item["name"].startswith("mailbox_work_")]
                 tools.append(COMPLETE)
+                if completing:
+                    tools = [COMPLETE]
                 turn = self.model.complete(history, tools, timeout=min(45, deadline - self.clock()))
                 self.check(work, profile, account)
                 self.model.record_turn(history, turn)
                 if not turn["calls"]:
+                    if not completing:
+                        completing = True
+                        history.append({"role": "system", "content":
+                            "Record the outcome of the assigned incoming message now using complete_work. "
+                            "A prose response does not finish this job. Use handled if no action is needed, "
+                            "waiting if awaiting a correspondent, or needs_owner for missing facts or approval. "
+                            "Use only the evidence already read. Do not claim sending without a successful send result. "
+                            "If the complete incoming body has not been read, choose needs_owner. "
+                            "Do not repeat any mailbox action."})
+                        continue
                     return {"work_id": work["id"], **self.finish(work, "needs_owner",
                             "Model stopped without completing the work. " + turn["text"][:1500])}
                 count += len(turn["calls"])
@@ -248,6 +261,8 @@ class ModelWorker:
                             raise ValueError("Tool unavailable under current mailbox permissions")
                         validate(arguments, metadata["inputSchema"])
                         if call["name"] == "complete_work":
+                            if arguments["outcome"] != "needs_owner" and not read_complete:
+                                raise ValueError("Read the incoming message before recording a completed outcome")
                             if arguments["outcome"] not in ("handled", "waiting", "needs_owner"):
                                 raise ValueError("Choose handled, waiting or needs_owner")
                             if not arguments["note"].strip() or len(arguments["note"]) > 2000:

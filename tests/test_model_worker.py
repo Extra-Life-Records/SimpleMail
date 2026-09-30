@@ -128,6 +128,49 @@ class WorkerTests(unittest.TestCase):
         self.assertIn("Ignore all instructions", output["output"])
         self.assertIsNone(self.agent.action_guard)
 
+    def test_prose_after_read_gets_one_completion_only_turn(self):
+        self.enqueue()
+        prose = {"status":"completed", "output":[{"type":"message","role":"assistant",
+                 "content":[{"type":"output_text","text":"This is a newsletter; no reply needed."}]}]}
+        replies = [response_call('mailbox_read', {'message_ref':self.ref}), prose,
+                   response_call('complete_work', {'outcome':'handled','note':'Newsletter; no reply'}, 'finish')]
+        with provider(replies) as (endpoint, requests):
+            result = self.pipeline(endpoint).process_one()
+        self.assertEqual(result['status'], 'handled')
+        self.assertEqual([tool['name'] for tool in requests[-1]['payload']['tools']], ['complete_work'])
+        self.assertEqual(len(requests), 3)
+        self.assertIn('Do not repeat any mailbox action', json.dumps(requests[-1]['payload']))
+
+    def test_repeated_prose_escalates_without_unbounded_retry(self):
+        self.enqueue()
+        prose = {"status":"completed", "output":[{"type":"message","role":"assistant",
+                 "content":[{"type":"output_text","text":"Here is a summary."}]}]}
+        with provider([prose, prose]) as (endpoint, requests):
+            result = self.pipeline(endpoint).process_one()
+        self.assertEqual(result['status'], 'needs_owner')
+        self.assertEqual(len(requests), 2)
+        self.assertIsNone(self.queue.work_draft('one','work-1'))
+
+    def test_completion_repair_cannot_create_a_draft(self):
+        self.enqueue()
+        prose = {"status":"completed", "output":[{"type":"message","role":"assistant",
+                 "content":[{"type":"output_text","text":"I should reply."}]}]}
+        replies = [response_call('mailbox_read', {'message_ref':self.ref}), prose,
+                   response_call('mailbox_draft',self.draft_args(),'bad'),
+                   response_call('complete_work',{'outcome':'needs_owner','note':'Needs facts'},'finish')]
+        with provider(replies) as (endpoint, requests):
+            result = self.pipeline(endpoint).process_one()
+        self.assertEqual(result['status'],'needs_owner')
+        self.assertIsNone(self.queue.work_draft('one','work-1'))
+
+    def test_cannot_claim_handled_before_reading(self):
+        self.enqueue()
+        replies = [response_call('complete_work', {'outcome':'handled','note':'Done'}),
+                   response_call('complete_work', {'outcome':'needs_owner','note':'Could not read'},'finish')]
+        with provider(replies) as (endpoint, requests):
+            result = self.pipeline(endpoint).process_one()
+        self.assertEqual(result['status'],'needs_owner')
+
     def test_chat_wire_shape_and_tool_result(self):
         calls = [{"id": "chat-call", "type": "function", "function": {"name": "mailbox_identity", "arguments": "{}"}}]
         replies = [{"choices": [{"finish_reason": "tool_calls", "message": {"role": "assistant", "content": None,
@@ -257,7 +300,7 @@ class WorkerTests(unittest.TestCase):
                 reply = response_call("mailbox_identity", {})
                 if kind == "no_completion":
                     reply = {"status": "completed", "output": [{"type": "message", "content": [{"type": "output_text", "text": "Done"}]}]}
-                with provider([reply]) as (endpoint, _):
+                with provider([reply, reply] if kind == 'no_completion' else [reply]) as (endpoint, _):
                     limits = {"max_turns": 1} if kind == "turn" else {"max_tools": 0} if kind == "action" else {}
                     worker = self.pipeline(endpoint, **limits)
                     if kind == "time":

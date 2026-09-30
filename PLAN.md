@@ -261,3 +261,21 @@ surface nondraft escalations next; the rest of the original plan remains open.
 
 Installed desktop SHA256: `09735DF956CAEE37D7C6FDAF93F2CD1D4ECE618F56431C3F1C0DBFBB53AC7AE2`.
 Installed agent SHA256: `3447446452D55E30F134CA9DAE5B6FEBD1921228D0E95FA1DEDD8CD632B9F068`.
+
+## Triage completion and owner review
+
+After prose-only output, the worker permits one completion-only recovery phase,
+within the existing turn/action/time budgets. Mailbox actions are unavailable in
+that phase; repeated prose escalates. Handled/waiting outcomes require reading the
+incoming body first. A live repeat of the same owner-authorized newsletter now
+reads and records handled, with its Seen flag unchanged and no send started.
+The mailbox is paused again. This is a bounded newsletter test, not evidence of
+general autonomous quality across all correspondence.
+
+Needs you now includes nondraft exceptions and missing facts. Owners can read the
+message, mark it handled, or request another attempt without enabling access.
+Review decisions require the displayed item's exact updated timestamp. Existing
+drafts/delivery outcomes block retry, and pending drafts must be sent or dismissed
+before resolution. Reviews stay accessible while paused; missing/moved messages
+remain resolvable. Activity displays readable work outcomes and reasons.
+Focused worker/queue and rendered review checks passed. Release/install pending.
