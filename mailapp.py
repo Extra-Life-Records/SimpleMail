@@ -861,6 +861,9 @@ def check_for_update(timeout=15):
     asset = None
     for a in data.get("assets", []):
         name = (a.get("name") or "").lower()
+        # The console agent shares the release but is never a desktop update.
+        if not name.startswith("simplemail-") or not name.endswith(".exe"):
+            continue
         if arch == "arm64" and "arm64" in name:
             asset = a
             break
