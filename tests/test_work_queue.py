@@ -93,7 +93,8 @@ class WorkTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 self.queue.owner_resolve('one',item['id'],item['updated_at'],action)
         self.queue.dismiss_draft('one',draft['id'],draft['revision'])
-        self.queue.owner_resolve('one',item['id'],item['updated_at'],'handled')
+        self.assertEqual(self.queue.owner_work('one',item['id'])['status'], 'handled')
+        self.assertEqual(self.queue.owner_reviews('one')['items'], [])
 
     def test_uncertain_delivery_cannot_be_reprocessed(self):
         item = self.review_item()

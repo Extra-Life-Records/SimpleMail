@@ -53,7 +53,7 @@ else:
     _WEBVIEW_IMPORT_ERROR = None
 
 APP_NAME = "SimpleMail"
-APP_VERSION = "1.5.2"
+APP_VERSION = "1.6.0"
 APP_REPO = "Extra-Life-Records/SimpleMail"  # owner/repo for auto-updates
 CONFIG_DIR = Path(os.environ.get("APPDATA", str(Path.home()))) / APP_NAME
 CONFIG_FILE = CONFIG_DIR / "config.json"
@@ -1429,7 +1429,8 @@ class Api:
             # Moved/deleted mail and connection failures must still be resolvable by the owner.
             message = {**item['headers'], 'text': 'Message unavailable. Check the mailbox connection or whether it moved.',
                        'unavailable': True, 'truncated': False}
-        return {"work": item, "message": message}
+        return {"work": item, "message": message,
+                "conversation": queue.conversation(account_id, item['message_ref'])}
 
     def resolve_agent_review(self, account_id, work_id, updated_at, action):
         self._acct(account_id)
@@ -1467,6 +1468,8 @@ class Api:
             ids = draft["payload"].get("attachment_ids", [])
             items = self._attachment_store().resolve(account_id, ids) if ids else []
             draft["attachments"] = [{"name": item["name"], "size": len(item["data"])} for item in items]
+            if draft['payload'].get('reply_ref'):
+                draft['conversation'] = self._review_queue().conversation(account_id, draft['payload']['reply_ref'])
         return drafts
 
     def list_agent_activity(self, account_id, cursor=None):
