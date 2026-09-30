@@ -26,7 +26,7 @@ class NoRedirect(HTTPRedirectHandler):
 
 class HTTPModel:
     def __init__(self, endpoint, model, api="responses", key_env="SIMPLEMAIL_MODEL_API_KEY", opener=None,
-                 max_output_tokens=8192):
+                 max_output_tokens=8192, key=None):
         try:
             parsed = urlsplit(endpoint)
             local = parsed.hostname in ("localhost", "127.0.0.1", "::1")
@@ -42,7 +42,9 @@ class HTTPModel:
             raise ModelError("Output-token limit must be between 256 and 32768")
         if not isinstance(key_env, str) or not re.fullmatch(r'[A-Za-z_][A-Za-z0-9_]*', key_env):
             raise ModelError("Specify the name of the provider-key environment variable")
-        self.key = os.environ.get(key_env, "")
+        self.key = os.environ.get(key_env, "") if key is None else key
+        if not isinstance(self.key, str):
+            raise ModelError("Provider key must be text")
         if any(char in self.key for char in '\r\n\x00'):
             raise ModelError("Provider key contains invalid characters")
         if not self.key and not local:
@@ -171,13 +173,16 @@ recipient delivery. When finished, call complete_work once with an accurate note
 
 
 class ModelWorker:
-    def __init__(self, mailbox, queue, model, max_turns=8, max_tools=24, clock=time.monotonic):
+    def __init__(self, mailbox, queue, model, max_turns=8, max_tools=24, clock=time.monotonic, owner_guard=None):
         self.mailbox, self.queue, self.model = mailbox, queue, model
         self.max_turns, self.max_tools, self.clock = max_turns, max_tools, clock
+        self.owner_guard = owner_guard
         self.server = MCPServer(mailbox)
         self.server.initialized = self.server.ready = True
 
     def check(self, work, initial_profile, initial_account=None):
+        if self.owner_guard:
+            self.owner_guard()
         self.queue.assert_claim(self.mailbox.account_id, work["id"], work["lease_token"])
         account = self.mailbox.cfg.account(self.mailbox.account_id)
         if initial_account is not None and account != initial_account:
@@ -289,6 +294,8 @@ class ModelWorker:
         import sys
         failures = 0
         while True:
+            if self.owner_guard:
+                self.owner_guard()
             try:
                 if not self.queue.profile(self.mailbox.account_id)["enabled"]:
                     result = {"status": "paused"}

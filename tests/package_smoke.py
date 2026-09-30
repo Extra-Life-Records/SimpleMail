@@ -6,6 +6,9 @@ import subprocess
 import tempfile
 import argparse
 import struct
+import time
+import sys
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 parser = argparse.ArgumentParser()
 parser.add_argument('--arch', choices=('x64', 'arm64'), required=True)
@@ -24,7 +27,8 @@ with tempfile.TemporaryDirectory(prefix='simplemail-installed-agent-') as root:
     config_dir = Path(root) / 'SimpleMail'
     config_dir.mkdir()
     (config_dir / 'config.json').write_text(json.dumps({'accounts': [
-        {'id': 'fixture', 'label': 'Packaged QA', 'email': 'qa@example.invalid', 'password': ''}],
+        {'id': 'fixture', 'label': 'Packaged QA', 'email': 'qa@example.invalid', 'password': '',
+         'imap_host': '127.0.0.1', 'imap_port': 1, 'smtp_host': '127.0.0.1', 'smtp_port': 1}],
         'active_account': 'fixture'}), encoding='utf-8')
     def command(*args, input=None):
         result = subprocess.run([str(exe), *args], input=input, capture_output=True,
@@ -54,7 +58,24 @@ with tempfile.TemporaryDirectory(prefix='simplemail-installed-agent-') as root:
     result = json.loads(command('run', '--account', 'fixture', '--endpoint',
         'http://127.0.0.1:1/v1/responses', '--model', 'fixture-model', '--key-env', 'SIMPLEMAIL_PACKAGED_QA_KEY', '--once'))
     assert result['status'] == 'paused'
+    from model_control import ModelControl
+    control = ModelControl(config_dir / 'agent' / 'mailbox.sqlite3')
+    control.save('fixture', 'http://127.0.0.1:1/v1/responses', 'fixture-model', 'responses')
+    control.set_profile('fixture', True, 'Prepare replies for owner review')
+    token = control.claim('fixture')
+    process = subprocess.Popen([str(exe), 'managed', '--account', 'fixture', '--token', token],
+                               env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    try:
+        deadline = time.monotonic() + 30
+        while time.monotonic() < deadline and control.state('fixture')['status'] not in ('unavailable', 'failed', 'stopped'):
+            time.sleep(.2)
+        assert control.state('fixture')['status'] == 'unavailable', control.state('fixture')
+    finally:
+        control.set_profile('fixture', False, 'Prepare replies for owner review')
+        control.stop('fixture')
+        process.wait(timeout=15)
+    assert process.returncode == 0 and control.state('fixture')['status'] == 'stopped'
     print(json.dumps({'packaged_agent': True, 'architecture': args.arch, 'stdio_protocol': True, 'identity_scoped': True,
         'draft_store': True, 'pause': True, 'model_worker_imports': True,
-        'live_mail_or_provider_requests': False, 'passed': True}))
+        'managed_worker_start_pause': True, 'live_mail_or_provider_requests': False, 'passed': True}))
 

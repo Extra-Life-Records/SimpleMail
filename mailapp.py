@@ -52,7 +52,7 @@ else:
     _WEBVIEW_IMPORT_ERROR = None
 
 APP_NAME = "SimpleMail"
-APP_VERSION = "1.3.1"
+APP_VERSION = "1.4.0"
 APP_REPO = "Extra-Life-Records/SimpleMail"  # owner/repo for auto-updates
 CONFIG_DIR = Path(os.environ.get("APPDATA", str(Path.home()))) / APP_NAME
 CONFIG_FILE = CONFIG_DIR / "config.json"
@@ -1364,13 +1364,32 @@ class Api:
         store = self._agent_store()
         drafts = self.list_agent_drafts(account_id)
         return {"profile": store.profile(account_id), "drafts": drafts,
-                "activity": store.activity(account_id)}
+                "activity": store.activity(account_id), "model": self.get_model_state(account_id)}
+
+    def _model_control(self):
+        from model_control import ModelControl
+        return ModelControl(CONFIG_DIR / "agent" / "mailbox.sqlite3")
+
+    def get_model_state(self, account_id):
+        self._acct(account_id)
+        return self._model_control().state(account_id)
+
+    def save_model_connection(self, account_id, endpoint, model, api, key="", clear_key=False):
+        self._acct(account_id)
+        return self._model_control().save(account_id, endpoint, model, api, key, clear_key)
+
+    def start_model_worker(self, account_id):
+        self._acct(account_id)
+        return self._model_control().start(account_id)
 
     def save_agent_settings(self, account_id, enabled, job, mode=None, allowed_recipients=None):
         self._acct(account_id)
         if enabled and not job.strip():
             raise ValueError("Write the agent's job first")
-        return self._agent_store().set_profile(account_id, enabled, job, mode, allowed_recipients)
+        profile = self._agent_store().set_profile(account_id, enabled, job, mode, allowed_recipients)
+        if not enabled:
+            self._model_control().stop(account_id)
+        return profile
 
     def list_agent_drafts(self, account_id, cursor=None):
         self._acct(account_id)

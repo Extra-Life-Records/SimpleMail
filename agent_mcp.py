@@ -266,6 +266,9 @@ def main(argv=None):
     pause = commands.add_parser("pause", help="Owner: pause agent access")
     pause.add_argument("account")
     commands.add_parser("accounts", help="Owner: list mailbox IDs without credentials")
+    managed = commands.add_parser("managed", help="Internal: run the owner's saved model connection")
+    managed.add_argument("--account", required=True)
+    managed.add_argument("--token", required=True)
     args = parser.parse_args(argv)
     # Avoid ever importing the GUI before stdout is reserved for the protocol.
     from contextlib import redirect_stdout
@@ -285,6 +288,9 @@ def main(argv=None):
             print(json.dumps(store.set_profile(args.account, True, args.job)))
         elif args.command == "pause":
             print(json.dumps(store.set_profile(args.account, False, store.profile(args.account)["job"])))
+        elif args.command == "managed":
+            from model_control import run_managed
+            run_managed(cfg, store.path, args.account, args.token)
         elif args.command == "watch":
             from work_queue import WorkQueue, watch, sync_inbox
             queue = WorkQueue(store.path)
