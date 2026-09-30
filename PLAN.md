@@ -203,3 +203,25 @@ Final normal launch is responsive with native title `SimpleMail v1.3.0`, served
 Agent frontend, and no local debugging listener. Installed desktop and agent hashes
 both match their newly built artifacts. Normal restart needed a second launch
 after the verification window exited; it is now running normally.
+
+## Published delivery — v1.3.1
+
+PRs #15 and #16 are merged. The v1.3.1 release is public with desktop and console
+agent downloads for x64 and ARM64. Both native runners passed regression, PE
+architecture and packaged MCP checks before publication. All four downloaded
+files match GitHub's published SHA256 digests. The desktop updater selects the
+desktop executable for each architecture, even when agent assets appear first.
+The post-publication updater gate passed all 46 checks, including a real file lock.
+
+The released x64 desktop and console agent replaced the installed copies. Native
+WebView2 checks verified Job, Needs you and Activity without changing owner job
+settings. The installed console passed the isolated protocol smoke check. The
+normal desktop is responsive with title `SimpleMail v1.3.1`; the temporary debug
+listener is closed. No real mail was sent and no live model was selected.
+
+Installed desktop SHA256: `EC1312E3883C8AF9B16683CC2D0066451B6D95B71DC708563953A84E90F48924`.
+Installed agent SHA256: `474DE207A399FD395F88EAE75D2CD707BF16DFBA8A2D8A8A176C5E2715FE2732`.
+ARM64 packaging is verified on a native runner; an ARM64 owner-device installation
+is not claimed. In-app model setup and worker controls, conversation memory,
+recoverable filing, simpler main navigation, credential and image protection,
+and a user-selected live model workflow remain open in the original plan.
