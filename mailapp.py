@@ -53,7 +53,7 @@ else:
     _WEBVIEW_IMPORT_ERROR = None
 
 APP_NAME = "SimpleMail"
-APP_VERSION = "1.8.0"
+APP_VERSION = "1.8.1"
 APP_REPO = "Extra-Life-Records/SimpleMail"  # owner/repo for auto-updates
 CONFIG_DIR = Path(os.environ.get("APPDATA", str(Path.home()))) / APP_NAME
 CONFIG_FILE = CONFIG_DIR / "config.json"
@@ -1943,6 +1943,7 @@ def main():
                     text_select=True,
                     width=1240,
                     height=800,
+                    maximized=True,
                     min_size=(980, 620),
                     background_color="#f6f8fb",
                 )
