@@ -615,10 +615,10 @@ check("T9: broken connection -> None (caller falls back)",
 # T9b: unread counting - web/app.js (badge tracks the header)
 # ---------------------------------------------------------------------------
 
-fn9 = re.search(r"function updateUnreadCount\(delta = 0\) \{(.*?)\n\}", js, re.S)
+fn9 = re.search(r"function updateUnreadCount\(delta = 0, server = null\) \{(.*?)\n\}", js, re.S)
 read_start = js.index("    // mark row as read locally")
-read_end = js.index("updateUnreadCount(wasUnread ? -1 : 0);", read_start) + len(
-    "updateUnreadCount(wasUnread ? -1 : 0);")
+read_end = js.index("updateUnreadCount(wasUnread ? -1 : 0, folder.server);", read_start) + len(
+    "updateUnreadCount(wasUnread ? -1 : 0, folder.server);")
 
 HARNESS9 = r"""
 const fs = require('fs'), vm = require('vm');
@@ -636,6 +636,7 @@ const mk = (folders, messages) => {
     state: { folders, messages, currentFolder: 'inbox' },
     $: () => header,
     renderFolders: () => seen.renders++,
+    mailSearch: null, folder: {server:null},
   });
   vm.runInContext(fnSrc, ctx);
   return { ctx, header, seen };
@@ -672,7 +673,7 @@ process.exit(ok ? 0 : 1);
 if shutil.which("node") and fn9:
     paths = []
     for src in (HARNESS9,
-                "function updateUnreadCount(delta = 0) {" + fn9.group(1) + "\n}",
+                "function updateUnreadCount(delta = 0, server = null) {" + fn9.group(1) + "\n}",
                 js[read_start:read_end]):
         with tempfile.NamedTemporaryFile("w", suffix=".js", prefix="sm-t9-", delete=False,
                                          dir=os.environ.get("TEMP")) as fh:

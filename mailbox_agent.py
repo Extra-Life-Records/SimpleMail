@@ -140,8 +140,11 @@ class MailboxAgent:
         if typ != "OK":
             raise ValueError("Mailbox folder is unavailable")
         _, values = imap.response("UIDVALIDITY")
-        if not values or not values[0] or not bytes(values[0]).isdigit():
+        if not values or not values[0] or not bytes(values[0]).isdigit() or int(values[0]) < 1:
             raise ValueError("Server did not provide UIDVALIDITY; cannot identify messages safely")
+        kind, sticky = imap.response('UIDNOTSTICKY')
+        if kind == 'UIDNOTSTICKY' and sticky and any(value is not None for value in sticky):
+            raise ValueError('This folder does not support stable message identities')
         return values[0].decode()
 
     def ref(self, folder, validity, uid):
