@@ -44,6 +44,8 @@ class AgentStore:
                 db.execute("ALTER TABLE profiles ADD COLUMN send_mode TEXT NOT NULL DEFAULT 'draft_for_review'")
             if "allowed_recipients" not in columns:
                 db.execute("ALTER TABLE profiles ADD COLUMN allowed_recipients TEXT NOT NULL DEFAULT '[]'")
+            if 'allow_filing' not in columns:
+                db.execute('ALTER TABLE profiles ADD COLUMN allow_filing INTEGER NOT NULL DEFAULT 0')
 
     @contextmanager
     def connect(self):
@@ -65,13 +67,16 @@ class AgentStore:
             row = db.execute("SELECT * FROM profiles WHERE account_id=?", (account_id,)).fetchone()
         return {"account_id": account_id, "enabled": bool(row["enabled"]) if row else False,
                 "job": row["job"] if row else "", "mode": row["send_mode"] if row else "draft_for_review",
-                "allowed_recipients": json.loads(row["allowed_recipients"]) if row else []}
+                "allowed_recipients": json.loads(row["allowed_recipients"]) if row else [],
+                "allow_filing": bool(row['allow_filing']) if row else False}
 
-    def set_profile(self, account_id, enabled, job, mode=None, allowed_recipients=None):
+    def set_profile(self, account_id, enabled, job, mode=None, allowed_recipients=None, allow_filing=None):
         if not isinstance(enabled, bool) or not isinstance(job, str) or len(job) > 10000:
             raise ValueError("Invalid agent settings")
         if mode is not None and mode not in ("draft_for_review", "reply_to_allowed"):
             raise ValueError("Invalid sending permission")
+        if allow_filing is not None and not isinstance(allow_filing, bool):
+            raise ValueError('Invalid filing permission')
         if allowed_recipients is not None:
             if not isinstance(allowed_recipients, list) or len(allowed_recipients) > 100:
                 raise ValueError("Provide at most 100 exact email addresses")
@@ -85,15 +90,18 @@ class AgentStore:
             mode = mode or (old["send_mode"] if old else "draft_for_review")
             allowed = allowed_recipients if allowed_recipients is not None else (
                 json.loads(old["allowed_recipients"]) if old else [])
+            filing = allow_filing if allow_filing is not None else bool(old and old['allow_filing'])
+            if filing and not job.strip():
+                raise ValueError('Write a job before allowing agent filing')
             if mode == "reply_to_allowed" and (not allowed or not job.strip()):
                 raise ValueError("Write a job and specify allowed recipients before enabling automatic replies")
             db.execute("INSERT INTO profiles(account_id,enabled,job) VALUES(?,?,?) "
                        "ON CONFLICT(account_id) DO UPDATE SET enabled=excluded.enabled,job=excluded.job",
                        (account_id, enabled, job))
-            db.execute("UPDATE profiles SET send_mode=?,allowed_recipients=? WHERE account_id=?",
-                       (mode, json.dumps(allowed), account_id))
+            db.execute("UPDATE profiles SET send_mode=?,allowed_recipients=?,allow_filing=? WHERE account_id=?",
+                       (mode, json.dumps(allowed), int(filing), account_id))
             self._event(db, account_id, "settings", {"enabled": enabled, "job": job,
-                                                    "mode": mode, "allowed_recipients": allowed})
+                                                    "mode": mode, "allowed_recipients": allowed, 'allow_filing': filing})
         return self.profile(account_id)
 
     @staticmethod

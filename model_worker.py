@@ -173,6 +173,9 @@ Only send when current permissions explicitly allow it AND the owner's job calls
 that routine reply. Other drafts need owner review. Never retry a sending/uncertain
 draft, even under a different request key. An SMTP-accepted reply is not confirmed
 recipient delivery. When finished, call complete_work once with an accurate note.
+File only if allow_filing is true and the owner's job calls for it. Keep messages
+with pending review drafts available. After filing, record the outcome and stop;
+the original message reference may no longer exist. Never retry uncertain moves.
 """
 
 
@@ -214,6 +217,15 @@ class ModelWorker:
         profile = self.queue.profile(self.mailbox.account_id)
         deadline = self.clock() + 240
         draft = self.queue.work_draft(self.mailbox.account_id, work["request_key"])
+        from mail_filing import FilingStore
+        filed = FilingStore(self.queue.path).request(self.mailbox.account_id, work['request_key'])
+        if filed:
+            from mailbox_agent import unpack
+            ref = unpack(work['message_ref'])
+            same_message = filed['source'] == {key: ref.get(key) for key in ('folder', 'validity', 'uid')}
+            status = 'handled' if filed['status'] == 'moved' and same_message else 'needs_owner'
+            return {'work_id': work['id'], **self.finish(work, status,
+                    'Message was filed in an earlier attempt.' if status == 'handled' else 'Previous filing needs owner review; do not repeat it.')}
         if draft and draft["status"] != "pending":
             outcome = {"sent": "waiting", "dismissed": "handled"}.get(draft["status"], "needs_owner")
             return {"work_id": work["id"], **self.finish(work, outcome, "Existing draft already processed; owner review if needed.")}
@@ -282,6 +294,9 @@ class ModelWorker:
                                 raise ValueError("Use this work item's stable request_key")
                             if arguments.get("reply_ref") and arguments["reply_ref"] != work["message_ref"]:
                                 raise ValueError("Use this incoming message as reply_ref")
+                        if call['name'] == 'mailbox_file':
+                            if not read_complete or arguments['message_ref'] != work['message_ref'] or arguments['request_key'] != work['request_key']:
+                                raise ValueError('Read this incoming message and use its assigned reference/request_key before filing')
                         if call["name"] in ("mailbox_draft", "mailbox_send") and arguments.get("draft_id"):
                             if call["name"] == "mailbox_send" and not read_complete:
                                 raise ValueError("Read the full bounded incoming message before sending")
@@ -291,6 +306,11 @@ class ModelWorker:
                         response = self.server.handle({"jsonrpc": "2.0", "id": count, "method": "tools/call",
                                                        "params": {"name": call["name"], "arguments": arguments}})
                         value = response.get("result") or {"isError": True, "error": response["error"]["message"]}
+                        if call['name'] == 'mailbox_file' and not value.get('isError'):
+                            filed = value.get('structuredContent', {})
+                            outcome = 'handled' if filed.get('status') == 'moved' else 'needs_owner'
+                            return {'work_id': work['id'], **self.finish(work, outcome,
+                                    'Filed: ' + arguments['reason'] if outcome == 'handled' else 'Filing needs checking; automatic retry is blocked.')}
                         if call["name"] == "mailbox_read" and arguments.get("message_ref") == work["message_ref"]:
                             if not value.get("isError"):
                                 read_complete = not value.get("structuredContent", {}).get("truncated", True)

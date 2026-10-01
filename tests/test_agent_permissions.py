@@ -66,7 +66,7 @@ class PermissionTests(unittest.TestCase):
                 db.execute("INSERT INTO profiles VALUES('one',1,'Legacy job')")
         with ThreadPoolExecutor(max_workers=2) as pool:
             migrated = list(pool.map(lambda _: AgentStore(legacy).profile("one"), range(2)))
-        self.assertTrue(all(item["mode"] == "draft_for_review" and not item["allowed_recipients"]
+        self.assertTrue(all(item["mode"] == "draft_for_review" and not item["allowed_recipients"] and not item['allow_filing']
                             for item in migrated))
 
     def test_default_blocks_send_and_never_exposes_owner_permission_tools(self):

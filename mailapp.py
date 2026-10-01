@@ -53,7 +53,7 @@ else:
     _WEBVIEW_IMPORT_ERROR = None
 
 APP_NAME = "SimpleMail"
-APP_VERSION = "1.6.0"
+APP_VERSION = "1.7.0"
 APP_REPO = "Extra-Life-Records/SimpleMail"  # owner/repo for auto-updates
 CONFIG_DIR = Path(os.environ.get("APPDATA", str(Path.home()))) / APP_NAME
 CONFIG_FILE = CONFIG_DIR / "config.json"
@@ -264,6 +264,15 @@ def map_folders(server_folders):
             out.append({"key": key, "name": f, "server": f})
             used_keys.add(key)
     return out
+
+
+def selected_validity(imap):
+    try:
+        _, values = imap.response('UIDVALIDITY')
+        value = values[0] if values else None
+        return value.decode('ascii') if isinstance(value, bytes) and value.isdigit() and int(value) > 0 else None
+    except (AttributeError, TypeError, ValueError):
+        return None
 
 
 def fetch_envelopes(imap, folder, limit):
@@ -688,35 +697,27 @@ def save_attachment(cfg, folder, uid, part_index):
         imap.logout()
 
 
-def delete_message(cfg, folder, uid):
-    import imaplib
-    imap, _, _ = connect_imap(cfg)
+def delete_message(cfg, folder, uid, expected_validity=None):
+    if not expected_validity:
+        raise ValueError("Refresh the folder before moving this message")
+    imap, folders, _ = connect_imap(cfg)
     try:
-        imap.select(folder, readonly=False)
-        imap.uid("store", uid, "+FLAGS", r"(\Deleted)")
-        imap.expunge()
+        trash = next((item['server'] for item in map_folders(folders) if item['key'] == 'trash'), None)
     finally:
         imap.logout()
+    if not trash:
+        raise ValueError('No Trash folder is available; choose a folder to move this message')
+    if folder == trash:
+        raise ValueError('Message is already in Trash; move it to another folder to restore it')
+    return move_message(cfg, folder, uid, trash, reason='Moved to Trash by owner', expected_validity=expected_validity)
 
 
-def move_message(cfg, folder, uid, target):
-    """Move a message to another folder (MOVE, fallback COPY+DELETE)."""
-    import imaplib
-    imap, _, _ = connect_imap(cfg)
-    try:
-        imap.select(folder, readonly=False)
-        try:
-            typ, _ = imap.uid("MOVE", uid, target)
-            if typ == "OK":
-                return
-        except Exception:
-            pass
-        # fallback for servers without MOVE
-        imap.uid("COPY", uid, target)
-        imap.uid("store", uid, "+FLAGS", r"(\Deleted)")
-        imap.expunge()
-    finally:
-        imap.logout()
+def move_message(cfg, folder, uid, target, actor='owner', reason='Filed by owner', rule_domain='', expected_validity=None):
+    if not expected_validity:
+        raise ValueError('Refresh the folder before moving this message')
+    from mail_filing import FilingStore, move
+    return move(cfg, FilingStore(CONFIG_DIR / 'agent' / 'mailbox.sqlite3'), folder, uid, target,
+                connect_imap, actor=actor, reason=reason, rule_domain=rule_domain, expected_validity=expected_validity)
 
 
 def create_folder(cfg, name):
@@ -769,28 +770,32 @@ def remove_rule(cfg, account_id, domain):
     return False
 
 
-def apply_rules(cfg, account_id, server_folder, envelopes):
+def apply_rules(cfg, account_id, server_folder, envelopes, validity=None):
     """Move any envelope whose sender domain has a learned rule targeting a
     different folder. Returns (kept_envelopes, moved_count)."""
     acct = cfg.account(account_id)
     rules = acct.get("rules", {})
     if not rules:
         return envelopes, 0
-    moves = {}  # uid -> target folder
-    kept = []
-    for env in envelopes:
-        dom = sender_domain(env["sender"])
-        target = rules.get(dom) if dom else None
-        if target and target != server_folder:
-            moves[env["uid"]] = target
-        else:
-            kept.append(env)
-    for uid, target in moves.items():
+    if server_folder.upper() != 'INBOX':
+        return envelopes, 0
+    kept, moved = [], 0
+    for envelope in envelopes:
+        domain = sender_domain(envelope['sender'])
+        target = rules.get(domain) if domain else None
+        if not target or target == server_folder:
+            kept.append(envelope)
+            continue
         try:
-            move_message(acct, server_folder, uid, target)
+            result = move_message(acct, server_folder, envelope['uid'], target, actor='rule',
+                                  reason='Filed by a saved sender rule', rule_domain=domain, expected_validity=validity)
+            if result['status'] == 'moved':
+                moved += 1
+            else:
+                kept.append(envelope)
         except Exception:
-            pass
-    return kept, len(moves)
+            kept.append(envelope)
+    return kept, moved
 
 
 def check_connection(acct):
@@ -1229,17 +1234,19 @@ class Api:
         imap, _, _ = connect_imap(acct)
         try:
             envelopes = fetch_envelopes(imap, server_folder, int(self.cfg["max_messages"]))
+            validity = selected_validity(imap)
             folder_unread = count_unread(imap, server_folder)
             inbox_unread = folder_unread if server_folder.upper() == "INBOX" else count_unread(imap, "INBOX")
         finally:
             imap.logout()
-        envelopes, moved = apply_rules(self.cfg, account_id, server_folder, envelopes)
+        envelopes, moved = apply_rules(self.cfg, account_id, server_folder, envelopes, validity)
         if moved:
             # re-open a fresh connection; apply_rules used its own
             imap2, _, _ = connect_imap(acct)
             try:
                 envelopes = fetch_envelopes(imap2, server_folder, int(self.cfg["max_messages"]))
-                envelopes, _ = apply_rules(self.cfg, account_id, server_folder, envelopes)
+                validity = selected_validity(imap2)
+                envelopes, _ = apply_rules(self.cfg, account_id, server_folder, envelopes, validity)
                 folder_unread = count_unread(imap2, server_folder)
                 inbox_unread = folder_unread if server_folder.upper() == "INBOX" else count_unread(imap2, "INBOX")
             finally:
@@ -1250,7 +1257,7 @@ class Api:
             "unread": unread,                  # unseen among the loaded page
             "folder_unread": folder_unread,    # whole folder, per the server
             "inbox_unread": inbox_unread,
-            "auto_moved": moved,
+            "auto_moved": moved, "validity": validity,
         }
 
     def get_message(self, account_id, server_folder, uid):
@@ -1407,7 +1414,7 @@ class Api:
         drafts = self.list_agent_drafts(account_id)
         return {"profile": store.profile(account_id), "drafts": drafts,
                 "activity": store.activity(account_id), "model": self.get_model_state(account_id),
-                "reviews": self.list_agent_reviews(account_id)}
+                "reviews": self.list_agent_reviews(account_id), "filings": self.list_filing_actions(account_id)}
 
     def _review_queue(self):
         from work_queue import WorkQueue
@@ -1452,11 +1459,11 @@ class Api:
         self._acct(account_id)
         return self._model_control().start(account_id)
 
-    def save_agent_settings(self, account_id, enabled, job, mode=None, allowed_recipients=None):
+    def save_agent_settings(self, account_id, enabled, job, mode=None, allowed_recipients=None, allow_filing=None):
         self._acct(account_id)
         if enabled and not job.strip():
             raise ValueError("Write the agent's job first")
-        profile = self._agent_store().set_profile(account_id, enabled, job, mode, allowed_recipients)
+        profile = self._agent_store().set_profile(account_id, enabled, job, mode, allowed_recipients, allow_filing)
         if not enabled:
             self._model_control().stop(account_id)
         return profile
@@ -1562,21 +1569,41 @@ class Api:
         data_uri = f"data:{mime};base64,{base64.b64encode(path.read_bytes()).decode('ascii')}"
         return {"name": path.name, "data_uri": data_uri}
 
-    def delete_message(self, account_id, server_folder, uid):
+    def delete_message(self, account_id, server_folder, uid, validity=None):
         self._log(f"CALL delete_message {account_id} {server_folder} {uid}")
-        delete_message(self._acct(account_id), server_folder, uid)
-        return {"ok": True}
+        return delete_message(self._acct(account_id), server_folder, uid, validity)
 
-    def move_message(self, account_id, server_folder, uid, target, sender="", learn=True):
+    def move_message(self, account_id, server_folder, uid, target, sender="", learn=False, validity=None):
         self._log(f"CALL move_message {account_id} {server_folder} {uid} -> {target} learn={learn}")
-        move_message(self._acct(account_id), server_folder, uid, target)
+        domain = sender_domain(sender) if learn and sender else None
+        result = move_message(self._acct(account_id), server_folder, uid, target, rule_domain=domain or "", expected_validity=validity)
         learned = None
-        if learn:
-            dom = sender_domain(sender) if sender else None
+        if learn and result["status"] == "moved":
+            dom = domain
             if dom:
                 learn_rule(self.cfg, account_id, dom, target)
                 learned = dom
-        return {"ok": True, "learned": learned}
+        return {**result, "learned": learned}
+
+    def _filing_store(self):
+        from mail_filing import FilingStore
+        return FilingStore(CONFIG_DIR / 'agent' / 'mailbox.sqlite3')
+
+    def list_filing_actions(self, account_id, cursor=None):
+        self._acct(account_id)
+        return self._filing_store().list(account_id, cursor)
+
+    def undo_filing(self, account_id, action_id):
+        from mail_filing import undo
+        account = self._acct(account_id)
+        store = self._filing_store()
+        action = store.get(account_id, action_id)
+        if action['status'] != 'moved':
+            raise ValueError('Only a confirmed move can be undone')
+        domain = action['rule_domain']
+        if domain and account.get('rules', {}).get(domain) == action['target']:
+            remove_rule(self.cfg, account_id, domain)
+        return undo(account, store, action_id, connect_imap)
 
     def create_folder(self, account_id, name):
         self._log(f"CALL create_folder {account_id} {name}")

@@ -49,6 +49,31 @@ function app() {
 const mail = (uid, seen = false) => ({ uid, subject: `Message ${uid}`, seen });
 const response = (envelopes, count = 2) => ({ envelopes, folder_unread: count, inbox_unread: count });
 
+test('recreated folder clears selection even when a different message reuses its UID', async () => {
+  const a = app();
+  a.run("state.folders[0].validity='7'; state.selectedUid='1'; $('read-body').innerHTML='Old message'");
+  a.api.list_messages = async () => ({...response([mail('1')]),validity:'8'});
+  await a.run('loadMessages({quiet:true})');
+  assert.equal(a.run('state.selectedUid'),null);
+  assert.equal(a.run('state.folders[0].validity'),'8');
+  assert(!a.run("$('read-body').innerHTML").includes('Old message'));
+});
+
+test('filing sends observed folder identity and duplicate clicks do not start another move', async () => {
+  const a = app();
+  a.run("state.folders[0].validity='7'; state.messages=[{uid:'3',seen:false,subject:'Newsletter'}]; state.selectedUid='3'");
+  const pending = deferred(); const calls=[];
+  a.api.delete_message = async (...args) => {calls.push(args);return pending.promise;};
+  const first = a.run('deleteSelected()');
+  await a.run('deleteSelected()');
+  assert.equal(calls.length,1);
+  assert.deepEqual(calls[0],['a','INBOX','3','7']);
+  pending.resolve({status:'uncertain',warning:'Needs checking'});
+  await first;
+  assert.equal(a.run('state.messages.length'),1);
+  assert.equal(a.run('state.folders[0].unread'),2);
+});
+
 test('reply quotes escape incoming HTML outside the reader sandbox', async () => {
   const a = app();
   a.api.get_message = async () => ({html:'<img src=x onerror="window.pywebview.api.send_mail()">',

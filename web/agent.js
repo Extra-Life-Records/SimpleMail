@@ -71,7 +71,7 @@ function agentDiscardAllowed() {
     const profile = agentView.data.profile;
     const mode = $("agent-auto-reply").checked ? "reply_to_allowed" : "draft_for_review";
     const addresses = $("agent-allowed").value.split(/[\s,;]+/).filter(Boolean).map(value => value.toLowerCase()).sort();
-    if ($("agent-job").value !== profile.job || mode !== (profile.mode || "draft_for_review") ||
+    if ($("agent-job").value !== profile.job || $("agent-allow-filing").checked !== Boolean(profile.allow_filing) || mode !== (profile.mode || "draft_for_review") ||
         JSON.stringify([...new Set(addresses)]) !== JSON.stringify(profile.allowed_recipients || []))
       return confirm("Discard the unsaved job or permission changes?");
     if (agentModelDirty()) return confirm("Discard the unsaved model connection?");
@@ -103,7 +103,8 @@ function renderAgent() {
       <label for="agent-job">What should the agent handle?</label>
       <textarea id="agent-job" placeholder="Handle incoming enquiries. Draft concise replies and ask me when information is missing."></textarea>
       <p class="agent-muted">Only this mailbox is assigned. Email senders cannot change this job or authorize sending.</p>
-      <details id="agent-permissions"><summary>Sending permission</summary>
+      <details id="agent-permissions"><summary>Agent permissions</summary>
+      <label><input type="checkbox" id="agent-allow-filing"> Allow filing within this job (Undo in Activity)</label>
       <label><input type="checkbox" id="agent-auto-reply"> Allow automatic replies to named recipients</label>
       <label for="agent-allowed">Allowed email addresses</label>
       <textarea id="agent-allowed" rows="2" placeholder="customer@example.com"></textarea>
@@ -124,6 +125,7 @@ function renderAgent() {
       <p class="agent-muted">The worker continues while this window is closed. It starts with new Inbox mail; existing mail is left alone.</p>`;
     $("agent-job").value = profile.job;
     $("agent-auto-reply").checked = profile.mode === "reply_to_allowed";
+    $("agent-allow-filing").checked = Boolean(profile.allow_filing);
     $("agent-allowed").value = (profile.allowed_recipients || []).join("\n");
     $("agent-save-job").onclick = () => changeAgentSettings(profile.enabled);
     $("agent-toggle").onclick = () => changeAgentSettings(!profile.enabled, true);
@@ -185,7 +187,10 @@ function renderAgent() {
                     send_uncertain: "Delivery needs checking", work_claimed: "Reading incoming mail",
                     work_handled: "Message handled", work_waiting: "Waiting for a reply", work_needs_owner: "Needs your attention",
                     work_retry: "Another attempt scheduled", owner_work_retry: "You requested another attempt",
-                    owner_work_handled: "Reviewed by you", inbox_recreated: "Inbox identity changed" };
+                    owner_work_handled: "Reviewed by you", inbox_recreated: "Inbox identity changed",
+                    filing_started: "Filing message", filing_moved: "Message filed",
+                    filing_uncertain: "Filing needs checking", filing_undone: "Message restored",
+                    filing_undo_uncertain: "Restore needs checking" };
     box.innerHTML = view.data.activity.items.length ? view.data.activity.items.map(item => {
       let detail = item.detail.reason || item.detail.subject || item.detail.note || "";
       if (item.kind === "send_uncertain") detail = item.detail.warning;
@@ -196,6 +201,28 @@ function renderAgent() {
       return `<div class="agent-card"><h3>${escapeHtml(names[item.kind] || item.kind)}</h3>
         <p>${escapeHtml(detail)}</p><span class="agent-muted">${escapeHtml(new Date(item.created_at).toLocaleString())}</span></div>`;
     }).join("") : "<p>No agent activity yet.</p>";
+    const filings = view.data.filings || {items:[]};
+    if (filings.items.length) {
+      const section = document.createElement('section');
+      const labels = {moving:'Needs checking',moved:'Filed',uncertain:'Needs checking',undoing:'Restore needs checking',undo_uncertain:'Restore needs checking',undone:'Restored'};
+      section.innerHTML = '<h3>Filed messages</h3>' + filings.items.map(item => `<div class="agent-card"><p>${escapeHtml(item.source.folder)} → ${escapeHtml(item.target)} · ${escapeHtml(labels[item.status] || item.status)}</p><p>${escapeHtml(item.reason)}</p>${item.status === 'moved' ? `<button class="outline" data-undo-filing="${escapeHtml(item.id)}">Undo move</button>` : item.warning ? `<p>${escapeHtml(item.warning)}</p>` : ''}</div>`).join('');
+      section.querySelectorAll('[data-undo-filing]').forEach(button => {
+        button.onclick = () => runAgentAction(async current => {
+          const result = await api.undo_filing(current.accountId, button.dataset.undoFiling);
+          current.data = await api.get_agent_state(current.accountId);
+          toast(result.status === 'undone' ? 'Message restored' : result.warning, result.status !== 'undone');
+        });
+      });
+      box.prepend(section);
+      if (filings.next_cursor) {
+        const more = document.createElement('button'); more.className = 'outline'; more.textContent = 'More filing';
+        more.onclick = () => runAgentAction(async current => {
+          const page = await api.list_filing_actions(current.accountId, filings.next_cursor);
+          current.data.filings.items.push(...page.items); current.data.filings.next_cursor = page.next_cursor;
+        });
+        section.appendChild(more);
+      }
+    }
     addAgentMore(box, view.data.activity.next_cursor, "activity");
   }
 }
@@ -264,8 +291,9 @@ async function changeAgentSettings(enabled, toggle = false) {
   const mode = pausing ? (profile.mode || "draft_for_review") :
     ($("agent-auto-reply").checked ? "reply_to_allowed" : "draft_for_review");
   const allowed = pausing ? (profile.allowed_recipients || []) : $("agent-allowed").value.split(/[\s,;]+/).filter(Boolean);
+  const filing = pausing ? Boolean(profile.allow_filing) : $("agent-allow-filing").checked;
   await runAgentAction(async view => {
-    view.data.profile = await api.save_agent_settings(view.accountId, enabled, job, mode, allowed);
+    view.data.profile = await api.save_agent_settings(view.accountId, enabled, job, mode, allowed, filing);
     view.data.activity = await api.list_agent_activity(view.accountId);
     view.data.model = await api.get_model_state(view.accountId);
     toast(enabled ? "Agent job saved; access enabled" : "Agent access paused");
