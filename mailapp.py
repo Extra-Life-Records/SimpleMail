@@ -28,6 +28,7 @@ from pathlib import Path
 import html as html_lib
 from html.parser import HTMLParser
 from mail_credentials import unlock_account, write_config
+from window_state import load_placement, remember_window
 
 # ---------------------------------------------------------------------------
 # pythonnet / pywebview environment (must be set BEFORE importing webview)
@@ -53,7 +54,7 @@ else:
     _WEBVIEW_IMPORT_ERROR = None
 
 APP_NAME = "SimpleMail"
-APP_VERSION = "1.8.1"
+APP_VERSION = "1.8.2"
 APP_REPO = "Extra-Life-Records/SimpleMail"  # owner/repo for auto-updates
 CONFIG_DIR = Path(os.environ.get("APPDATA", str(Path.home()))) / APP_NAME
 CONFIG_FILE = CONFIG_DIR / "config.json"
@@ -1917,6 +1918,8 @@ def main():
 
     api = Api(cfg)
     icon_path = _BASE_DIR / "assets" / "icon.ico"
+    placement_file = CONFIG_DIR / "window.json"
+    placement = load_placement(placement_file)
 
     # Native inbox notifications (like Outlook): one quiet poller per account,
     # each toast labelled with its mailbox so arrivals are never ambiguous.
@@ -1943,12 +1946,14 @@ def main():
                     text_select=True,
                     width=1240,
                     height=800,
-                    maximized=True,
+                    maximized=placement["maximized"] if placement else True,
                     min_size=(980, 620),
                     background_color="#f6f8fb",
                 )
                 global _API_WINDOW
                 _API_WINDOW = window  # lets Api.pick_image open a file dialog
+                if os.name == "nt":
+                    window.events.shown += lambda: remember_window(window, placement_file, placement)
                 # Title-bar icon (pywebview 5.x has no icon kwarg; set it on
                 # the native form)
                 if os.name == "nt" and icon_path.exists():

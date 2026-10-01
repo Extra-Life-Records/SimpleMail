@@ -107,6 +107,10 @@ Prints IMAP + SMTP connection results — handy for debugging.
 
 ## Auto-update & distribution
 
+SimpleMail remembers its window size, position and maximized state on this device.
+The first launch opens maximized. If a monitor is disconnected, the window returns
+to an available screen. Minimizing does not change how it opens next time.
+
 SimpleMail distributes itself through **GitHub releases**:
 
 - Repo: https://github.com/Extra-Life-Records/SimpleMail
