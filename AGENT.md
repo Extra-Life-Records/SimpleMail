@@ -22,6 +22,18 @@ block repeat processing; send or dismiss pending drafts before resolving their w
 **Activity** records readable outcomes and reasons. Prose-only model output gets a
 bounded completion-only recovery step; repeated prose remains an owner review item.
 
+Filing is separately controlled under **Agent setup → Agent permissions**.
+**Allow filing within this job** starts unchecked. Grant it only when the job
+calls for moving messages into existing folders. The model reads before filing,
+keeps messages with replies awaiting review, and cannot change its own permission.
+The CLI equivalent is `assign YOUR_ACCOUNT_ID --job "Your job" --allow-filing`.
+
+Confirmed moves and Move to Trash offer Undo in **Activity**, even while paused
+and after restarting the app. Filing requires IMAP MOVE and UIDPLUS with a stable
+destination identity. An interrupted move or restore remains **Needs checking**;
+refresh/search the folders before deciding what happened. Neither the model nor
+the app automatically repeats an uncertain move. Permanent deletion is unavailable.
+
 ## Assign a job
 
 Open SimpleMail, select a mailbox, and choose **Agent**. Write its

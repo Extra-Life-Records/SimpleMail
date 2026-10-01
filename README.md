@@ -25,12 +25,14 @@ owner's x64 machine and is published with native x64 and ARM64 downloads.
 - ✅ Reply, Reply All, forwarding with files, CC/BCC and outgoing attachments.
   Attachments survive local draft recovery; replies honour Reply-To and
   preserve conversation headers.
-- ✅ Delete messages
+- ✅ Move to Trash and file messages with durable Undo in Activity
+- ✅ Optional agent filing within its assigned job; disabled until explicitly granted
+- ✅ Conversation notes persist across restarts and later replies
 - ✅ Unread counts, message snippets, modern three-pane layout
 - ✅ Click links in HTML and plain-text emails to open them in your browser
 - ✅ Mail refreshes every 30 seconds and when returning to the app, preserving
   the open email, search and message-list scroll position
-- ✅ Credentials + signature stored locally in `%APPDATA%\SimpleMail`
+- ✅ Credentials protected with Windows DPAPI; settings stored locally in `%APPDATA%\SimpleMail`
 - ✅ Connection test button in Settings
 - ✅ Native ARM64 and x64 builds from the same codebase
 

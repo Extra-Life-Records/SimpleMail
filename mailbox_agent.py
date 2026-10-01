@@ -93,6 +93,33 @@ class MailboxAgent:
         from work_queue import WorkQueue
         return WorkQueue(self.store.path).conversation(self.account_id, message_ref, message)
 
+    def file(self, message_ref, target, request_key, reason):
+        from mail_filing import FilingStore, move
+        ref = unpack(message_ref)
+        if ref.get('account') != self.account_id:
+            raise ValueError('Message belongs to another mailbox')
+        def guard():
+            account = self._account()
+            if not self.store.profile(self.account_id).get('allow_filing'):
+                raise ValueError('Owner has not allowed agent filing')
+            return account
+        account = guard()
+        store = FilingStore(self.store.path)
+        existing = store.request(self.account_id, request_key)
+        if existing:
+            if existing['source'] != {key: ref.get(key) for key in ('folder','validity','uid')} or existing['target'] != target:
+                raise ValueError('Filing request key belongs to another operation')
+            return existing
+        message = self.read(message_ref, 50000)
+        if message['truncated']:
+            raise ValueError('Read the full bounded message before filing; ask the owner about longer messages')
+        with store.connect() as db:
+            if db.execute("SELECT 1 FROM drafts WHERE account_id=? AND status IN ('pending','sending','uncertain') "
+                          "AND json_extract(payload,'$.reply_ref')=?", (self.account_id, message_ref)).fetchone():
+                raise ValueError('This message has a draft or delivery outcome needing owner review; keep it available')
+        return move(account, store, ref['folder'], ref['uid'], target, self.connector,
+                    expected_validity=ref['validity'], request_key=request_key, actor='agent', reason=reason, guard=guard)
+
     @contextmanager
     def connection(self):
         imap, folders, _ = self.connector(self._account())

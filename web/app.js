@@ -52,6 +52,24 @@ function toast(msg, isError = false) {
   t._h = setTimeout(() => (t.style.display = "none"), 3200);
 }
 
+function filingToast(accountId, result, message) {
+  toast(message);
+  const button = document.createElement('button');
+  button.textContent = 'Undo';
+  button.style.cssText = 'margin:0 0 0 12px;padding:2px 10px;width:auto';
+  button.onclick = async () => {
+    button.disabled = true;
+    try {
+      const restored = await api.undo_filing(accountId, result.action_id);
+      toast(restored.status === 'undone' ? 'Message restored' : restored.warning, restored.status !== 'undone');
+      if (state.activeAccountId === accountId) await loadMessages({quiet:true});
+    } catch (error) { toast(String(error), true); }
+  };
+  $('toast').appendChild(button);
+  clearTimeout($('toast')._h);
+  $('toast')._h = setTimeout(() => ($('toast').style.display = 'none'), 8000);
+}
+
 function fmtDate(s) {
   try {
     const d = new Date(s);
@@ -221,6 +239,13 @@ async function loadMessages({ quiet = false } = {}) {
       res = results[0].status === "fulfilled" ? results[0].value : {envelopes: [], unread: 0};
     } else res = await api.list_messages(accountId, folder.server);
     if (view !== mailboxView || request !== view.requests) return;
+    if (folder.validity && res.validity && folder.validity !== res.validity) {
+      state.selectedUid = null;
+      messageReadRequest++;
+      $("read-header").style.display = "none";
+      $("read-body").innerHTML = '<div id="loading">Folder changed. Select a message again.</div>';
+    }
+    folder.validity = res.validity || null;
     const scrollTop = $("msg-list").scrollTop;
     state.messages = localDrafts.map(draft => ({uid: "local:" + draft.id, localDraftId: draft.id,
       sender: "Draft · " + (draft.payload.to || "No recipient"), subject: draft.payload.subject || "(no subject)",
@@ -819,14 +844,17 @@ async function markUnread() {
 }
 
 async function deleteSelected() {
+  if (mailboxView.actions) { toast("Wait for the current mail action to finish"); return; }
   if (!state.selectedUid) return;
-  if (!confirm("Delete this message?")) return;
+  if (!confirm("Move this message to Trash? You can undo it in Activity.")) return;
   const folder = state.folders.find((f) => f.key === state.currentFolder);
   const view = mailboxView;
   const uid = state.selectedUid;
   try {
     const gone = state.messages.find((m) => m.uid === uid);
-    await mailAction(() => api.delete_message(state.activeAccountId, folder.server, uid));
+    const accountId = state.activeAccountId;
+    const result = await mailAction(() => api.delete_message(accountId, folder.server, uid, folder.validity));
+    if (result.status !== "moved") { toast(result.warning || "Filing needs checking", true); return; }
     if (view !== mailboxView) return;
     state.messages = state.messages.filter((m) => m.uid !== uid);
     if (state.selectedUid === uid) {
@@ -837,9 +865,9 @@ async function deleteSelected() {
     }
     renderMessages();
     updateUnreadCount(gone && !gone.seen ? -1 : 0);
-    toast("Deleted");
+    filingToast(accountId, result, "Moved to Trash");
   } catch (e) {
-    toast("Delete failed: " + e, true);
+    toast("Move to Trash failed: " + e, true);
   }
 }
 
@@ -909,7 +937,7 @@ function openCtxMenu(x, y, uid) {
   html += `<div class="ctx-sep"></div>
     <div class="ctx-item" data-act="newfolder">📁 New folder…</div>
     <div class="ctx-item" data-act="unread">🔵 Mark unread</div>
-    <div class="ctx-item" data-act="delete" style="color:#b91c1c">🗑 Delete</div>`;
+    <div class="ctx-item" data-act="delete" style="color:#b91c1c">🗑 Move to Trash</div>`;
   menu.innerHTML = html;
   menu.classList.add("show");
   // keep menu inside the window
@@ -930,13 +958,16 @@ function openCtxMenu(x, y, uid) {
 }
 
 async function ctxMoveTo(target) {
+  if (mailboxView.actions) { toast("Wait for the current mail action to finish"); return; }
   const msg = state.messages.find((m) => m.uid === ctxUid);
   const folder = state.folders.find((f) => f.key === state.currentFolder);
   if (!msg || !folder) return;
   const view = mailboxView;
   const uid = ctxUid;
   try {
-    const res = await mailAction(() => api.move_message(state.activeAccountId, folder.server, uid, target, msg.sender, true));
+    const accountId = state.activeAccountId;
+    const res = await mailAction(() => api.move_message(accountId, folder.server, uid, target, msg.sender, false, folder.validity));
+    if (res.status !== "moved") { toast(res.warning || "Filing needs checking", true); return; }
     if (view !== mailboxView) return;
     state.messages = state.messages.filter((m) => m.uid !== uid);
     if (state.selectedUid === uid) {
@@ -953,7 +984,7 @@ async function ctxMoveTo(target) {
     if (res.learned) {
       toast(`Moved & learned: mail from ${res.learned} → ${target} from now on`);
     } else {
-      toast("Moved");
+      filingToast(accountId, res, "Moved");
     }
   } catch (e) {
     toast("Move failed: " + e, true);

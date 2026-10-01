@@ -128,6 +128,75 @@ class WorkerTests(unittest.TestCase):
         self.assertIn("Ignore all instructions", output["output"])
         self.assertIsNone(self.agent.action_guard)
 
+    def test_filing_wire_reads_then_moves_and_finishes_without_reading_old_ref(self):
+        self.enqueue()
+        self.queue.set_profile('one', True, 'File newsletters', allow_filing=True)
+        self.agent.file = Mock(return_value={'status': 'moved', 'action_id': 'file-1'})
+        replies = [response_call('mailbox_read', {'message_ref': self.ref}),
+                   response_call('mailbox_file', {'message_ref': self.ref, 'target': 'Archive',
+                                 'request_key': 'work-1', 'reason': 'Newsletter'}, 'file')]
+        with provider(replies) as (endpoint, requests):
+            result = self.pipeline(endpoint).process_one()
+        self.assertEqual(result['status'], 'handled')
+        self.assertEqual(len(requests), 2)
+        self.agent.file.assert_called_once_with(message_ref=self.ref, target='Archive', request_key='work-1', reason='Newsletter')
+
+    def test_filing_uncertain_finishes_for_owner_without_next_model_turn(self):
+        self.enqueue()
+        self.queue.set_profile('one', True, 'File newsletters', allow_filing=True)
+        self.agent.file = Mock(return_value={'status': 'uncertain', 'action_id': 'file-1'})
+        replies = [response_call('mailbox_read', {'message_ref': self.ref}),
+                   response_call('mailbox_file', {'message_ref': self.ref, 'target': 'Archive',
+                                 'request_key': 'work-1', 'reason': 'Newsletter'}, 'file')]
+        with provider(replies) as (endpoint, requests):
+            result = self.pipeline(endpoint).process_one()
+        self.assertEqual(result['status'], 'needs_owner')
+        self.assertEqual(len(requests), 2)
+        self.assertEqual(self.agent.file.call_count, 1)
+
+    def test_filing_requires_grant_full_read_and_exact_assigned_reference(self):
+        for grant, read, reference in [(False, True, self.ref), (True, False, self.ref),
+                                       (True, True, self.agent.ref('INBOX', '7', '999'))]:
+            with self.subTest(grant=grant, read=read, reference=reference):
+                # Separate work databases avoid reusing a completed work item.
+                path = Path(self.temp.name) / f'case-{grant}-{read}-{reference[-8:]}.sqlite3'
+                queue = WorkQueue(path)
+                queue.set_profile('one', True, 'File newsletters', allow_filing=grant)
+                agent = MailboxAgent(Config(), queue, 'one', self.agent.connector)
+                agent._message = self.agent._message
+                agent.file = Mock()
+                queue.record_sync('one', None, '7', 1, [{'message_ref':self.ref,
+                                  'headers':agent.headers(self.message),'status':'pending','note':''}])
+                replies = ([response_call('mailbox_read', {'message_ref':self.ref})] if read else []) + [
+                    response_call('mailbox_file', {'message_ref': reference, 'target':'Archive',
+                                  'request_key':'work-1','reason':'Newsletter'}, 'file'),
+                    response_call('complete_work', {'outcome':'needs_owner','note':'Check filing'}, 'finish')]
+                with provider(replies) as (endpoint, requests):
+                    result = ModelWorker(agent, queue, self.client(endpoint)).process_one()
+                self.assertEqual(result['status'], 'needs_owner')
+                agent.file.assert_not_called()
+
+    def test_filing_restart_recovers_without_model_or_mail_read(self):
+        from mail_filing import FilingStore
+        for status in ('moved', 'moving', 'uncertain', 'undoing', 'undo_uncertain', 'undone'):
+            with self.subTest(status=status):
+                path = Path(self.temp.name) / f'recovery-{status}.sqlite3'
+                queue = WorkQueue(path)
+                queue.set_profile('one', True, 'File newsletters', allow_filing=True)
+                agent = MailboxAgent(Config(), queue, 'one', self.agent.connector)
+                queue.record_sync('one', None, '7', 1, [{'message_ref':self.ref,
+                                  'headers':agent.headers(self.message),'status':'pending','note':''}])
+                filing = FilingStore(path)
+                item, _ = filing.begin('one', {'folder':'INBOX','validity':'7','uid':'1'},
+                                       'Archive', 'work-1', 'agent', 'Newsletter')
+                if status != 'moving':
+                    filing.finish('one', item['id'], status)
+                model = Mock()
+                result = ModelWorker(agent, queue, model).process_one()
+                self.assertEqual(result['status'], 'handled' if status == 'moved' else 'needs_owner')
+                model.start.assert_not_called()
+                agent.connector.assert_not_called()
+
     def test_prose_after_read_gets_one_completion_only_turn(self):
         self.enqueue()
         prose = {"status":"completed", "output":[{"type":"message","role":"assistant",

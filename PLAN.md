@@ -357,3 +357,34 @@ state and record new notes through their claimed work's completion. Owner review
 shows escaped notes in a collapsed detail. Ten new state tests plus a model-wire
 continuation test and rendered owner-review checks cover the feature. Release and
 installed checks remain pending at this source checkpoint.
+
+### Recoverable filing (v1.7.0 source)
+
+v1.6.0 conversation memory is published and installed. Native owner review shows
+the existing handled newsletter's notes while paused, and those notes survive
+relaunch. No message was sent.
+
+Filing now uses single-message UID MOVE with UIDPLUS destination mapping. It
+records the request before the command, validates the source folder identity,
+and retains the destination identity for owner Undo. Missing acknowledgements,
+missing mapping and interrupted restoration remain visible as needing checks;
+the application never repeats these operations automatically. Folder-wide
+EXPUNGE and the unsafe COPY/delete fallback are removed.
+
+Confirmed moves offer Undo immediately and persist in Activity, including after
+restart and while the agent is paused. Moving to Trash is recoverable; permanent
+deletion is not exposed. Ordinary manual moves do not silently create new rules.
+Existing sender rules file Inbox messages through the same journal; Undo removes
+the matching rule before restoring so the next refresh does not refile it.
+
+Agent filing is an explicit, default-off owner grant separate from sending.
+The model must read the full bounded incoming message and use its assigned
+reference/request key; mail with a pending or uncertain reply remains available
+for review. Filing ends the work item immediately. A restarted worker consults
+the durable filing result before any model/mail access. Permission and Pause
+checks run immediately before the network action.
+
+Protocol, restart, permission, model-wire and rendered Activity tests use
+temporary databases and fake mail connections. The real server's capabilities
+were checked read-only; no real message was moved for development testing.
+Release and installed verification remain pending at this source checkpoint.
