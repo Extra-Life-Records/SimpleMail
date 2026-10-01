@@ -49,7 +49,8 @@ mail service, rather than adding Outlook-style settings and toolbars.
 - Package desktop and agent entry points for Windows x64/ARM64; run existing
   release gates and verify an installed build before claiming delivery.
 - Connect a user-selected model/mailbox and verify a real permitted workflow.
-  Provider credentials or real recipient choices are required for that live gate.
+  Remote providers need credentials; a local model can verify this without a key
+  or sending mail.
 
 ## Deferred
 
@@ -58,6 +59,41 @@ productivity options such as snooze/send-later. Add only when a concrete job
 requires them.
 
 ## Evidence and progress
+
+### Delivery audit — complete, 2026-10-01
+
+All four priorities are delivered in v1.8.0. Historical source checkpoints below
+record what was pending at each release; this audit is the current status.
+The interface remains Inbox, Needs you, Activity, one search box and secondary
+Agent setup/Folders. Deferred calendar/contact/theme/rule-builder features remain
+outside this plan.
+
+| Requirement | Implementation and verified evidence |
+| --- | --- |
+| One assigned mailbox; no credentials or owner permission tools exposed; complete pagination/search; PEEK reads, stable references, readable bodies/thread headers and bounded attachments | `mailbox_agent.py` / `agent_mcp.py`; account, reference, query, cursor, threading, attachment, malicious-content and subprocess MCP tests in `test_agent_mailbox.py`; packaged MCP lifecycle checks on both native architectures. |
+| Durable, editable, idempotent drafts and shared action journal; account job and Pause; review mode by default | `agent_store.py`; duplicate/concurrent draft requests, account isolation, revision changes and paused review tests; native installed profile remains paused and review-only. |
+| Needs you editing/send/dismiss; exact revision approval; outcomes/reasons; Reply-To/Reply All, CC/BCC, threading, outgoing files | `mailapp.py`, `mail_attachments.py`, owner/compose frontend; `test_correspondence.py`, `test_agent_permissions.py`, `test_agent_mailbox.py` validate actual MIME bytes, recipient/header rules, attachments and approval claims. Browser owner review and search-to-Reply-All/local-save checks pass. |
+| Visible sending; no retry after uncertain/interrupted SMTP; distinct Sent-copy failures; human autosave/resume/recovery | `compose_store.py` / `web/compose.js`; compose recovery and isolated sending tests verify persisted claims, restored files and uncertainty. Browser recovery is account-bound and cannot mask uncertain delivery. |
+| Owner job/recipient grants; exceptions escalate; model cannot expand permissions | `agent_store.py` / `model_worker.py`; every To/CC/BCC recipient, permission revocation, prohibited/self/list replies, exact work/ref binding and unavailable owner-tool tests pass. |
+| Independent worker, incremental sync, durable queue, model adapters, retry/backoff, loops and concurrent/restarted workers | `model_control.py` / `work_queue.py` / `model_worker.py`; subprocess managed worker, exclusive start, token/lease expiry, restart recovery, baseline/backlog bounds, duplicate sync, Responses/Chat wire and provider failure tests pass. |
+| Persistent waiting/handled/needs-owner conversation state; memory separate from incoming instructions | `conversation_state.py`; exact header links, missing/ambiguous links, account isolation, newer-state protection, owner outcomes and untrusted model-context tests pass. The earlier real handled newsletter and notes remain persisted. |
+| Pause stops future actions; recoverable filing and owner Undo | `mail_filing.py`; journal-before-MOVE, destination identity, restart, duplicate requests, lost acknowledgements, concurrent Undo and immediate grant/Pause checks pass. Native synthetic Activity Undo succeeds while paused; uncertain moves offer no Undo. No production filing actions were created for testing. |
+| Small navigation; protected credentials; remote images off until permitted | Main navigation/unsaved-action and late-response tests, DPAPI credential tests, rendered privacy/settings checks and earlier native WebView2 privacy/credential checks pass. Final stored credentials remain protected and match the protected original backup. |
+| Native x64/ARM64 desktop and console release; installed executable; live updater | PR #27 regression run `36796622297` and packaging run `36796622327` passed. Tag v1.8.0 release run `36797011392` passed both architectures and publication. Four downloaded hashes match public digests. Both installed x64 executables match their release hashes; responsive normal window reports v1.8.0; temporary debug port is closed. Live updater reports 46 checks, zero failures. |
+| Connected model/mailbox and real permitted workflow | `hello@extraliferecords.com` uses local `qwen3.5:4b`; model server and configured model are available. The previously authorised bounded newsletter run is recorded as handled once, with conversation notes. Final real native search returned 25 results including body-only matches and loaded a continuation without opening/moving/sending mail. The agent remains paused, review-only, with filing off and no allowed send recipients. |
+| Complete human search beyond the loaded page | `search_messages` and the single search box; 121-result fake-server test covers cross-folder same-UID identities and full-body query syntax. Local drafts, stable read/quote/flag/attachment actions, query/account/folder invalidation and retry/continuation pass. Browser check at 980x620 and real installed server search pass. |
+
+Current regression evidence: 183 isolated Python tests, 30 frontend tests and
+three Chromium browser checks. SMTP acceptance and filing recovery are tested
+with isolated fixtures; no live email send was needed or performed. ARM64
+packaged runtime was checked on the native CI runner; the owner's physical
+installation is x64. Human drafts remain local to the device, missing thread
+headers remain separate, and uncertain network outcomes require owner review.
+
+Installed desktop SHA256:
+`9e1bebb00222f20b953375cb3e3bd3eee6807fdcff5a5bcefcf9d1f5831a1362`.
+Installed console SHA256:
+`6c536f4423da616c946e280a91ff13c23a8566d4d88a4c10335ba2a90b46f498`.
 
 Priority 1 is implemented in source: scoped MCP tools, complete-folder
 pagination/search, UIDVALIDITY references, bounded reads/attachments, durable

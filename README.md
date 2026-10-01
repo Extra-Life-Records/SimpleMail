@@ -9,10 +9,11 @@ HTML email rendering, a signature, and Sent/Drafts/Junk/Trash folders.
 
 ## Features
 
-The v1.5.0 build includes in-app model setup and Start/Pause controls, owner
+The v1.8.0 build includes in-app model setup and Start/Pause controls, owner
 review for exceptions as well as drafts, readable work outcomes, a scoped
 MCP connection, persistent drafts for
-review, and main Inbox / Needs you / Activity navigation. See [connection instructions](AGENT.md) and the
+review, conversation memory, recoverable filing, complete mailbox search,
+and main Inbox / Needs you / Activity navigation. See [connection instructions](AGENT.md) and the
 [implementation plan](PLAN.md). This build has been installed and checked on the
 owner's x64 machine and is published with native x64 and ARM64 downloads.
 
