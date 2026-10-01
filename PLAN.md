@@ -388,3 +388,30 @@ Protocol, restart, permission, model-wire and rendered Activity tests use
 temporary databases and fake mail connections. The real server's capabilities
 were checked read-only; no real message was moved for development testing.
 Release and installed verification remain pending at this source checkpoint.
+
+### Complete human search (v1.8.0 source)
+
+v1.7.0 recoverable filing is published and installed. The real journal is
+available, filing remains default-off, and native synthetic Activity checks
+prove paused Undo and uncertain-action restrictions. Both installed executable
+hashes match the public release. Normal relaunch leaves no debugging listener;
+mail settings/credentials and agent permissions remain unchanged.
+
+The single search box now asks IMAP to search full headers and bodies across
+mail folders, using bounded continuation pages. Each row shows its source folder
+and retains account/folder/UIDVALIDITY/UID identity. Default search excludes
+Junk/Trash; opening those folders searches that folder explicitly. Local human
+drafts are included once and searched by recipients, subject and body.
+
+Load more keeps earlier results, temporary failures expose a retry using the
+same cursor, and changed queries/accounts/folders invalidate late responses.
+Clearing the search returns to the current folder. Bulk mark-read is disabled
+for search results. Reading, attachment saving, Reply All, forwarding, marking
+unread and filing use the result's actual source identity. Recreated/nonsticky
+folders fail before acting on stale results. Body-only matches are not filtered
+out by the old sender/subject filter.
+
+Isolated server tests prove pagination beyond the loaded Inbox and same-UID
+results in different folders. Rendered tests at 980 by 620 cover reading,
+continuation/retry, Reply All and local draft saving, stale searches and clearing.
+Release and installed verification remain pending at this source checkpoint.

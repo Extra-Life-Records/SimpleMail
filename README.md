@@ -28,6 +28,7 @@ owner's x64 machine and is published with native x64 and ARM64 downloads.
 - ✅ Move to Trash and file messages with durable Undo in Activity
 - ✅ Optional agent filing within its assigned job; disabled until explicitly granted
 - ✅ Conversation notes persist across restarts and later replies
+- ✅ Search full message bodies across folders, with Load more results; local human drafts are included
 - ✅ Unread counts, message snippets, modern three-pane layout
 - ✅ Click links in HTML and plain-text emails to open them in your browser
 - ✅ Mail refreshes every 30 seconds and when returning to the app, preserving

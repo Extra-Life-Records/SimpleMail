@@ -53,7 +53,7 @@ else:
     _WEBVIEW_IMPORT_ERROR = None
 
 APP_NAME = "SimpleMail"
-APP_VERSION = "1.7.0"
+APP_VERSION = "1.8.0"
 APP_REPO = "Extra-Life-Records/SimpleMail"  # owner/repo for auto-updates
 CONFIG_DIR = Path(os.environ.get("APPDATA", str(Path.home()))) / APP_NAME
 CONFIG_FILE = CONFIG_DIR / "config.json"
@@ -476,10 +476,23 @@ def collapse_snippet(s):
     return s.strip()
 
 
-def fetch_message(imap, folder, uid):
+def select_message_folder(imap, folder, expected_validity=None, readonly=False):
+    from mail_filing import quote
+    typ, _ = imap.select(quote(folder), readonly=readonly)
+    if typ != 'OK':
+        raise ValueError('Folder unavailable')
+    if expected_validity is not None and selected_validity(imap) != expected_validity:
+        raise ValueError('Folder changed; search again before using this message')
+    if expected_validity is not None:
+        kind, sticky = imap.response('UIDNOTSTICKY')
+        if kind == 'UIDNOTSTICKY' and sticky and any(value is not None for value in sticky):
+            raise ValueError('This folder does not support stable message identities')
+
+
+def fetch_message(imap, folder, uid, expected_validity=None):
     """Return dict with parsed message; marks it \\Seen."""
     import imaplib
-    imap.select(folder, readonly=False)
+    select_message_folder(imap, folder, expected_validity)
     typ, data = imap.uid("fetch", uid, "(RFC822)")
     if typ != "OK" or not data or data[0] is None:
         raise RuntimeError("Could not fetch message")
@@ -661,24 +674,24 @@ def mark_all_read(cfg, folder):
         imap.logout()
 
 
-def set_seen(cfg, folder, uid, seen):
+def set_seen(cfg, folder, uid, seen, expected_validity=None):
     """Mark a single message read (seen=True) or unread (seen=False)."""
     import imaplib
     imap, _, _ = connect_imap(cfg)
     try:
-        imap.select(folder, readonly=False)
+        select_message_folder(imap, folder, expected_validity)
         imap.uid("store", uid, "+FLAGS" if seen else "-FLAGS", r"(\Seen)")
     finally:
         imap.logout()
 
 
-def save_attachment(cfg, folder, uid, part_index):
+def save_attachment(cfg, folder, uid, part_index, expected_validity=None):
     """Save one attachment part to ~/Downloads/SimpleMail/. Returns path."""
     import imaplib
     imap, _, _ = connect_imap(cfg)
     try:
-        imap.select(folder, readonly=True)
-        typ, data = imap.uid("fetch", uid, "(RFC822)")
+        select_message_folder(imap, folder, expected_validity, readonly=True)
+        typ, data = imap.uid("fetch", uid, "(BODY.PEEK[])")
         if typ != "OK" or not data or data[0] is None:
             raise RuntimeError("Could not fetch message")
         msg = message_from_bytes(data[0][1], policy=email_policy)
@@ -1260,19 +1273,45 @@ class Api:
             "auto_moved": moved, "validity": validity,
         }
 
-    def get_message(self, account_id, server_folder, uid):
+    def search_messages(self, account_id, query, cursor=None, server_folder=None):
+        from mailbox_agent import MailboxAgent, unpack
+        self._acct(account_id)
+        owner = MailboxAgent(self.cfg, self._agent_store(), account_id, owner_access=True)
+        page = (owner.search(server_folder, query, cursor, 25) if server_folder else
+                owner.search_all(query, cursor, 25))
+        items = []
+        for item in page['items']:
+            ref = unpack(item['message_ref'])
+            items.append({**item, 'uid': 'search:' + item['message_ref'],
+                          'server_uid': ref['uid'], 'server_folder': ref['folder'],
+                          'validity': ref['validity'], 'snippet': ref['folder']})
+        # Human drafts are local, so IMAP cannot find them. Include them once.
+        if not cursor and (server_folder is None or server_folder.lower() == 'drafts'):
+            needle = query.casefold().strip()
+            for draft in self._compose_store().list(account_id):
+                payload = draft['payload']
+                if needle and needle not in '\n'.join(str(payload.get(key, '')) for key in
+                                                     ('to', 'cc', 'bcc', 'subject', 'body')).casefold():
+                    continue
+                items.insert(0, {'uid':'local:' + draft['id'], 'localDraftId':draft['id'],
+                                  'sender':'Draft · ' + (payload.get('to') or 'No recipient'),
+                                  'subject':payload.get('subject') or '(no subject)', 'date':draft['updated_at'],
+                                  'seen':True, 'snippet':'Drafts · Saved on this device'})
+        return {**page, 'items':items}
+
+    def get_message(self, account_id, server_folder, uid, validity=None):
         self._log(f"CALL get_message {account_id} {server_folder} {uid}")
         acct = self._acct(account_id)
         imap, _, _ = connect_imap(acct)
         try:
-            result = fetch_message(imap, server_folder, uid)
+            result = fetch_message(imap, server_folder, uid, validity)
             result["message_ref"] = None
             try:
                 from mailbox_agent import pack
-                _, data = imap.response("UIDVALIDITY")
-                if data and isinstance(data[0], bytes) and data[0].isdigit():
+                folder_identity = validity or selected_validity(imap)
+                if folder_identity:
                     result["message_ref"] = pack({"account": account_id, "folder": server_folder,
-                                                  "validity": data[0].decode(), "uid": str(uid)})
+                                                  "validity": folder_identity, "uid": str(uid)})
             except (ValueError, TypeError):
                 pass
             return result
@@ -1309,7 +1348,7 @@ class Api:
         self._acct(account_id)
         return self._attachment_store().add_base64(account_id, name, encoded)
 
-    def get_compose_context(self, account_id, server_folder, uid, reply_all=False, forward=False):
+    def get_compose_context(self, account_id, server_folder, uid, reply_all=False, forward=False, validity=None):
         from mail_attachments import reply_context, MAX_TOTAL
         from mailbox_agent import clean_string
         acct = self._acct(account_id)
@@ -1318,10 +1357,7 @@ class Api:
             raise ValueError("Invalid message UID")
         imap, _, _ = connect_imap(acct)
         try:
-            quoted = '"' + server_folder.replace('\\', '\\\\').replace('"', '\\"') + '"'
-            typ, _ = imap.select(quoted, readonly=True)
-            if typ != "OK":
-                raise ValueError("Folder unavailable")
+            select_message_folder(imap, server_folder, validity, readonly=True)
             typ, data = imap.uid("fetch", uid, "(RFC822.SIZE)")
             size = re.search(rb'RFC822.SIZE (\d+)', b' '.join(item for item in data or [] if isinstance(item, bytes)))
             if typ != "OK" or not size or int(size[1]) > 30 * 1024 * 1024:
@@ -1537,14 +1573,14 @@ class Api:
         count = mark_all_read(self._acct(account_id), server_folder)
         return {"count": count}
 
-    def set_seen(self, account_id, server_folder, uid, seen):
+    def set_seen(self, account_id, server_folder, uid, seen, validity=None):
         self._log(f"CALL set_seen {account_id} {server_folder} {uid} seen={seen}")
-        set_seen(self._acct(account_id), server_folder, uid, bool(seen))
+        set_seen(self._acct(account_id), server_folder, uid, bool(seen), validity)
         return {"ok": True}
 
-    def save_attachment(self, account_id, server_folder, uid, part_index):
+    def save_attachment(self, account_id, server_folder, uid, part_index, validity=None):
         self._log(f"CALL save_attachment {account_id} {server_folder} {uid} part={part_index}")
-        path = save_attachment(self._acct(account_id), server_folder, uid, int(part_index))
+        path = save_attachment(self._acct(account_id), server_folder, uid, int(part_index), validity)
         return {"path": path}
 
     def pick_image(self):

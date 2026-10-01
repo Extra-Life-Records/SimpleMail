@@ -35,3 +35,5 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           node tests/owner_review_browser.cjs
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          node tests/owner_search_browser.cjs
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }

@@ -21,8 +21,72 @@ const MAIL_REFRESH_MS = 30000;
 let mailboxView = { requests: 0, loads: 0, actions: 0 };
 let messageReadRequest = 0;
 let refreshTimer = null;
+let mailSearch = null;
+let searchTimer = null;
+
+function resetMailSearch() {
+  clearTimeout(searchTimer);
+  mailSearch = null;
+  $("markall-btn").disabled = false;
+}
+
+function messageLocation(message) {
+  const folder = state.folders.find(f => f.key === state.currentFolder);
+  return {server:message?.server_folder || folder?.server,
+          uid:message?.server_uid || message?.uid,
+          validity:message?.validity || folder?.validity};
+}
+
+function queueMailSearch() {
+  resetMailSearch();
+  mailboxView.requests++;
+  messageReadRequest++;
+  state.selectedUid = null;
+  $("read-header").style.display = "none";
+  $("read-body").innerHTML = '<div id="loading">Select a message</div>';
+  const query = $("search-box").value.trim();
+  if (!query) return loadMessages();
+  const folder = state.folders.find(f => f.key === state.currentFolder);
+  mailSearch = {query, serverFolder:['junk','trash'].includes(folder?.key) ? folder.server : null,
+                cursor:null, busy:false, items:[], error:null};
+  state.messages = [];
+  $("folder-title").textContent = 'Search results';
+  $("markall-btn").disabled = true;
+  $("msg-list").innerHTML = '<div class="empty">Searching…</div>';
+  $("folder-count").textContent = '';
+  searchTimer = setTimeout(() => loadSearchResults(), 350);
+}
+
+async function loadSearchResults(more = false) {
+  const search = mailSearch;
+  if (!search || search.busy || (more && !search.cursor)) return;
+  const view = mailboxView;
+  const accountId = state.activeAccountId;
+  search.busy = true;
+  search.error = null;
+  renderMessages();
+  try {
+    const page = await api.search_messages(accountId, search.query, more ? search.cursor : null, search.serverFolder);
+    if (search !== mailSearch || view !== mailboxView) return;
+    const items = more ? search.items.concat(page.items) : page.items;
+    search.items = [...new Map(items.map(item => [item.uid,item])).values()];
+    search.cursor = page.next_cursor;
+    state.messages = search.items;
+  } catch (error) {
+    if (search !== mailSearch || view !== mailboxView) return;
+    search.error = String(error);
+    search.retryMore = more;
+  } finally {
+    search.busy = false;
+    if (search === mailSearch && view === mailboxView) {
+      renderMessages();
+      updateUnreadCount();
+    }
+  }
+}
 
 function resetMailboxView() {
+  resetMailSearch();
   mailboxView = { requests: 0, loads: 0, actions: 0 };
   return mailboxView;
 }
@@ -62,7 +126,7 @@ function filingToast(accountId, result, message) {
     try {
       const restored = await api.undo_filing(accountId, result.action_id);
       toast(restored.status === 'undone' ? 'Message restored' : restored.warning, restored.status !== 'undone');
-      if (state.activeAccountId === accountId) await loadMessages({quiet:true});
+      if (state.activeAccountId === accountId) await loadMessages({quiet:!mailSearch});
     } catch (error) { toast(String(error), true); }
   };
   $('toast').appendChild(button);
@@ -208,6 +272,7 @@ function selectFolder(key) {
   document.querySelectorAll(".folder").forEach((b) =>
     b.classList.toggle("active", b.dataset.key === key));
   const folder = state.folders.find((f) => f.key === key);
+  $("search-box").placeholder = ['junk','trash'].includes(key) ? `Search ${folder?.name || key}…` : 'Search all mail…';
   $("folder-title").textContent = folder ? folder.name : key;
   $("folder-count").textContent = "";
   $("msg-list").innerHTML = '<div class="empty">Loading…</div>';
@@ -217,6 +282,7 @@ function selectFolder(key) {
 }
 
 async function loadMessages({ quiet = false } = {}) {
+  if (mailSearch) { if (!quiet) return loadSearchResults(); return; }
   const folder = state.folders.find((f) => f.key === state.currentFolder);
   if (!api || !state.activeAccountId || !folder) return;
   const view = mailboxView;
@@ -252,6 +318,7 @@ async function loadMessages({ quiet = false } = {}) {
       date: draft.updated_at, seen: true,
       snippet: draft.status === "pending" ? "Saved on this device · " + draft.payload.body.slice(0, 120)
         : "Delivery needs checking · Open for details"})).concat(res.envelopes);
+    $("folder-title").textContent = folder.name;
     renderMessages();
     $("msg-list").scrollTop = scrollTop;
     // one source of truth: the server's whole-folder count. res.unread only
@@ -276,13 +343,12 @@ function renderMessages() {
   box.innerHTML = "";
   const q = ($("search-box").value || "").toLowerCase().trim();
   let list = state.messages;
-  if (q) {
+  if (q && !mailSearch) {
     list = state.messages.filter((m) =>
       m.sender.toLowerCase().includes(q) || m.subject.toLowerCase().includes(q));
   }
   if (!list.length) {
-    box.innerHTML = '<div class="empty">' + (q ? "No matches" : "No messages") + "</div>";
-    return;
+    box.innerHTML = '<div class="empty">' + (mailSearch?.busy ? "Searching…" : mailSearch?.error ? "Search could not finish" : mailSearch?.cursor ? "More folders remain to search" : q ? "No matches" : "No messages") + "</div>";
   }
   list.forEach((m) => {
     const div = document.createElement("div");
@@ -308,6 +374,19 @@ function renderMessages() {
     });
     box.appendChild(div);
   });
+  if (mailSearch) {
+    if (mailSearch.error) {
+      const error = document.createElement('div'); error.className = 'empty'; error.textContent = mailSearch.error;
+      box.appendChild(error);
+    }
+    if (mailSearch.cursor || mailSearch.error) {
+      const button = document.createElement('button'); button.className = 'outline';
+      button.textContent = mailSearch.busy ? 'Searching…' : mailSearch.error ? 'Try search again' : 'Load more results';
+      button.disabled = mailSearch.busy;
+      button.onclick = () => loadSearchResults(mailSearch.error ? mailSearch.retryMore : true);
+      box.appendChild(button);
+    }
+  }
 }
 
 /* ---------------- reading ---------------- */
@@ -321,9 +400,9 @@ async function openMessage(uid, el) {
     m.classList.toggle("selected", m.dataset.uid === uid));
   $("read-header").style.display = "none";
   $("read-body").innerHTML = '<div id="loading"><span class="spinner"></span> Loading…</div>';
-  const folder = state.folders.find((f) => f.key === state.currentFolder);
+  const folder = messageLocation(state.messages.find(m => m.uid === uid) || {uid});
   try {
-    const msg = await mailAction(() => api.get_message(accountId, folder.server, uid));
+    const msg = await mailAction(() => api.get_message(accountId, folder.server, folder.uid, folder.validity));
     if (view !== mailboxView || request !== messageReadRequest) return;
     $("read-header").style.display = "block";
     if (typeof resetConversation === "function") resetConversation(accountId, uid, msg.message_ref);
@@ -346,7 +425,7 @@ async function openMessage(uid, el) {
           btn.disabled = true;
           btn.textContent = "…";
           try {
-            const res = await api.save_attachment(accountId, folder.server, uid, btn.dataset.idx);
+            const res = await api.save_attachment(accountId, folder.server, folder.uid, btn.dataset.idx, folder.validity);
             toast("Saved to " + res.path);
           } catch (e) {
             toast("Save failed: " + e, true);
@@ -385,9 +464,9 @@ async function openMessage(uid, el) {
     // mark row as read locally; backend already marked it seen
     if (el) { el.classList.remove("unread"); el.classList.add("seen"); el.classList.add("selected"); }
     const idx = state.messages.findIndex((m) => m.uid === uid);
-    const wasUnread = idx >= 0 && !state.messages[idx].seen;
+    const wasUnread = idx >= 0 && state.messages[idx].seen === false;
     if (idx >= 0) state.messages[idx].seen = true;
-    updateUnreadCount(wasUnread ? -1 : 0);
+    updateUnreadCount(wasUnread ? -1 : 0, folder.server);
   } catch (e) {
     if (view !== mailboxView || request !== messageReadRequest) return;
     $("read-body").innerHTML = '<div class="empty">Failed to open message.</div>';
@@ -400,13 +479,14 @@ async function openMessage(uid, el) {
    (reading one, marking it unread, deleting or moving an unread one). It is
    a delta, never a recount: the stored figure covers the whole folder, but
    state.messages only holds the loaded page. */
-function updateUnreadCount(delta = 0) {
-  const folder = state.folders.find((f) => f.key === state.currentFolder);
+function updateUnreadCount(delta = 0, server = null) {
+  const folder = state.folders.find((f) => server ? f.server === server : f.key === state.currentFolder);
   if (folder && delta) folder.unread = Math.max(0, (folder.unread || 0) + delta);
   const unread = folder && typeof folder.unread === "number"
     ? folder.unread
     : state.messages.filter((m) => !m.seen).length;
-  $("folder-count").textContent = `${unread} unread · ${state.messages.length} shown`;
+  $("folder-count").textContent = mailSearch ? `${state.messages.length} found${mailSearch.cursor ? ' · more' : ''}` : `${unread} unread · ${state.messages.length} shown`;
+  $("folder-count").title = mailSearch ? (mailSearch.serverFolder || 'All mail except Junk and Trash') : '';
   renderFolders();  // the badge moves with the header - it used to go stale
 }
 
@@ -773,7 +853,7 @@ async function init() {
   });
   startMailRefresh();
   $("sig-image-btn").addEventListener("click", addSigImage);
-  $("search-box").addEventListener("input", () => renderMessages());
+  $("search-box").addEventListener("input", queueMailSearch);
   $("upd-now").addEventListener("click", doUpdate);
   $("upd-later").addEventListener("click", () => $("update-backdrop").classList.remove("show"));
   $("upd-check").addEventListener("click", () => checkForUpdates(false));
@@ -811,6 +891,7 @@ async function init() {
 /* ---------------- delete / reply / forward ---------------- */
 
 async function markAllRead() {
+  if (mailSearch) return;
   const folder = state.folders.find((f) => f.key === state.currentFolder);
   if (!folder || !folder.server) return;
   const view = mailboxView;
@@ -826,17 +907,17 @@ async function markAllRead() {
 
 async function markUnread() {
   if (!state.selectedUid) return;
-  const folder = state.folders.find((f) => f.key === state.currentFolder);
+  const folder = messageLocation(state.messages.find(m => m.uid === state.selectedUid));
   const view = mailboxView;
   const uid = state.selectedUid;
   try {
-    await mailAction(() => api.set_seen(state.activeAccountId, folder.server, uid, false));
+    await mailAction(() => api.set_seen(state.activeAccountId, folder.server, folder.uid, false, folder.validity));
     if (view !== mailboxView) return;
     const idx = state.messages.findIndex((m) => m.uid === uid);
     const wasRead = idx >= 0 && state.messages[idx].seen;
     if (idx >= 0) state.messages[idx].seen = false;
     renderMessages();
-    updateUnreadCount(wasRead ? 1 : 0);
+    updateUnreadCount(wasRead ? 1 : 0, folder.server);
     toast("Marked as unread");
   } catch (e) {
     toast("Failed: " + e, true);
@@ -847,16 +928,17 @@ async function deleteSelected() {
   if (mailboxView.actions) { toast("Wait for the current mail action to finish"); return; }
   if (!state.selectedUid) return;
   if (!confirm("Move this message to Trash? You can undo it in Activity.")) return;
-  const folder = state.folders.find((f) => f.key === state.currentFolder);
+  const folder = messageLocation(state.messages.find(m => m.uid === state.selectedUid));
   const view = mailboxView;
   const uid = state.selectedUid;
   try {
     const gone = state.messages.find((m) => m.uid === uid);
     const accountId = state.activeAccountId;
-    const result = await mailAction(() => api.delete_message(accountId, folder.server, uid, folder.validity));
+    const result = await mailAction(() => api.delete_message(accountId, folder.server, folder.uid, folder.validity));
     if (result.status !== "moved") { toast(result.warning || "Filing needs checking", true); return; }
     if (view !== mailboxView) return;
     state.messages = state.messages.filter((m) => m.uid !== uid);
+    if (mailSearch) mailSearch.items = state.messages;
     if (state.selectedUid === uid) {
       state.selectedUid = null;
       messageReadRequest++;
@@ -864,7 +946,7 @@ async function deleteSelected() {
       $("read-body").innerHTML = '<div id="loading">Select a message</div>';
     }
     renderMessages();
-    updateUnreadCount(gone && !gone.seen ? -1 : 0);
+    updateUnreadCount(gone?.seen === false ? -1 : 0, folder.server);
     filingToast(accountId, result, "Moved to Trash");
   } catch (e) {
     toast("Move to Trash failed: " + e, true);
@@ -886,9 +968,9 @@ async function forwardMessage() {
 async function openCorrespondence(message, forward, replyAll) {
   const accountId = state.activeAccountId;
   const view = mailboxView;
-  const folder = state.folders.find(f => f.key === state.currentFolder);
+  const folder = messageLocation(message);
   try {
-    const context = await api.get_compose_context(accountId, folder.server, message.uid, replyAll, forward);
+    const context = await api.get_compose_context(accountId, folder.server, folder.uid, replyAll, forward, folder.validity);
     if (view !== mailboxView || accountId !== state.activeAccountId || message.uid !== state.selectedUid) return;
     let subject = context.subject;
     if (forward ? !/^fwd?:/i.test(subject) : !/^re:/i.test(subject)) subject = (forward ? "Fwd: " : "Re: ") + subject;
@@ -900,9 +982,9 @@ async function openCorrespondence(message, forward, replyAll) {
 
 async function quoteOriginal(m) {
   // fetch the full message to quote its body
-  const folder = state.folders.find((f) => f.key === state.currentFolder);
+  const folder = messageLocation(m);
   try {
-    const msg = await api.get_message(state.activeAccountId, folder.server, m.uid);
+    const msg = await api.get_message(state.activeAccountId, folder.server, folder.uid, folder.validity);
     // Quotes live in the editable main document, outside the reader sandbox.
     // Use escaped text so incoming HTML can never execute beside the GUI bridge.
     const src = `<pre style="white-space:pre-wrap">${escapeHtml(msg.text || "")}</pre>`;
@@ -921,7 +1003,7 @@ function openCtxMenu(x, y, uid) {
   ctxUid = uid;
   const menu = $("ctx-menu");
   const msg = state.messages.find((m) => m.uid === uid);
-  const current = state.folders.find((f) => f.key === state.currentFolder);
+  const current = messageLocation(msg);
   const sender = msg ? shortFrom(msg.sender) : "";
   const dom = msg ? (msg.sender.match(/<([^>]+)>/) || [msg.sender, msg.sender])[1].split("@")[1] || "" : "";
   let html = `<div class="ctx-head">${escapeHtml(sender)}<br><span style="font-weight:400">${escapeHtml(dom || "")}</span></div>`;
@@ -960,16 +1042,17 @@ function openCtxMenu(x, y, uid) {
 async function ctxMoveTo(target) {
   if (mailboxView.actions) { toast("Wait for the current mail action to finish"); return; }
   const msg = state.messages.find((m) => m.uid === ctxUid);
-  const folder = state.folders.find((f) => f.key === state.currentFolder);
+  const folder = messageLocation(msg);
   if (!msg || !folder) return;
   const view = mailboxView;
   const uid = ctxUid;
   try {
     const accountId = state.activeAccountId;
-    const res = await mailAction(() => api.move_message(accountId, folder.server, uid, target, msg.sender, false, folder.validity));
+    const res = await mailAction(() => api.move_message(accountId, folder.server, folder.uid, target, msg.sender, false, folder.validity));
     if (res.status !== "moved") { toast(res.warning || "Filing needs checking", true); return; }
     if (view !== mailboxView) return;
     state.messages = state.messages.filter((m) => m.uid !== uid);
+    if (mailSearch) mailSearch.items = state.messages;
     if (state.selectedUid === uid) {
       state.selectedUid = null;
       messageReadRequest++;
@@ -979,8 +1062,8 @@ async function ctxMoveTo(target) {
     renderMessages();
     // an unread message leaves this folder's count and joins the target's
     const dest = state.folders.find((f) => f.server === target);
-    if (!msg.seen && dest) dest.unread = (dest.unread || 0) + 1;
-    updateUnreadCount(msg.seen ? 0 : -1);
+    if (msg.seen === false && dest) dest.unread = (dest.unread || 0) + 1;
+    updateUnreadCount(msg.seen === false ? -1 : 0, folder.server);
     if (res.learned) {
       toast(`Moved & learned: mail from ${res.learned} → ${target} from now on`);
     } else {

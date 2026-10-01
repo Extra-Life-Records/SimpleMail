@@ -49,6 +49,65 @@ function app() {
 const mail = (uid, seen = false) => ({ uid, subject: `Message ${uid}`, seen });
 const response = (envelopes, count = 2) => ({ envelopes, folder_unread: count, inbox_unread: count });
 
+test('server search keeps body-only results and appends complete continuation pages', async () => {
+  const a = app();
+  a.run("$('search-box').value='body-only'; queueMailSearch()");
+  const calls=[];
+  a.api.search_messages = async (...args) => {calls.push(args);return {items:[
+    {...mail(args[2] ? 'second' : 'first'),sender:'Person',subject:'Unrelated subject',server_uid:'1',server_folder:args[2]?'Archive':'INBOX',validity:args[2]?'8':'7'}],next_cursor:args[2]?null:'next'};};
+  await a.run('loadSearchResults()');
+  assert.equal(a.run('state.messages.length'),1);
+  await a.run('loadSearchResults(true)');
+  assert.equal(a.run('state.messages.length'),2);
+  assert.deepEqual(calls,[['a','body-only',null,null],['a','body-only','next',null]]);
+  assert.equal(a.run("$('markall-btn').disabled"),true);
+});
+
+test('search continuation failure retains existing results and retries the same cursor', async () => {
+  const a = app(); a.run("$('search-box').value='receipt'; queueMailSearch()");
+  a.api.search_messages = async () => ({items:[{...mail('first'),sender:'Person'}],next_cursor:'next'});
+  await a.run('loadSearchResults()');
+  a.api.search_messages = async () => {throw Error('offline');};
+  await a.run('loadSearchResults(true)');
+  assert.equal(a.run('state.messages[0].uid'),'first');
+  assert.equal(a.run('mailSearch.cursor'),'next');
+  assert.equal(a.run('mailSearch.retryMore'),true);
+  let cursor;
+  a.api.search_messages = async (_,__,value) => {cursor=value;return {items:[{...mail('second'),sender:'Person'}],next_cursor:null};};
+  await a.run('loadSearchResults(mailSearch.retryMore)');
+  assert.equal(cursor,'next');
+  assert.equal(a.run('state.messages.length'),2);
+});
+
+test('late search response cannot replace a newer query or another folder', async () => {
+  const a = app(); const pending = deferred();
+  a.run("$('search-box').value='old'; queueMailSearch()");
+  a.api.search_messages = () => pending.promise;
+  const old = a.run('loadSearchResults()');
+  a.run("$('search-box').value='new'; queueMailSearch()");
+  a.api.search_messages = async () => ({items:[{...mail('new'),sender:'Person'}],next_cursor:null});
+  await a.run('loadSearchResults()');
+  pending.resolve({items:[{...mail('old'),sender:'Person'}],next_cursor:null}); await old;
+  assert.equal(a.run('state.messages[0].uid'),'new');
+  const later = deferred(); a.api.search_messages = () => later.promise;
+  const request=a.run('loadSearchResults()');
+  a.api.list_messages=async()=>response([mail('normal')]);
+  await a.run("selectFolder('inbox')");
+  later.resolve({items:[{...mail('stale'),sender:'Person'}],next_cursor:null});await request;
+  assert.equal(a.run('state.messages[0].uid'),'normal');
+});
+
+test('opening search results uses their source UID and validity and changes its source badge only', async () => {
+  const a = app();
+  a.run("state.folders.push({key:'archive',server:'Archive',unread:4}); state.messages=[{uid:'search:ref',server_uid:'1',server_folder:'Archive',validity:'8',seen:false}]");
+  let received;
+  a.api.get_message=async(...args)=>{received=args;return {subject:'Found',sender:'Person',to:'Owner',date:'today',text:'Body'};};
+  await a.run("openMessage('search:ref',null)");
+  assert.deepEqual(received,['a','Archive','1','8']);
+  assert.equal(a.run('state.folders[0].unread'),2);
+  assert.equal(a.run('state.folders[1].unread'),3);
+});
+
 test('recreated folder clears selection even when a different message reuses its UID', async () => {
   const a = app();
   a.run("state.folders[0].validity='7'; state.selectedUid='1'; $('read-body').innerHTML='Old message'");
