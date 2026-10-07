@@ -38,6 +38,8 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           node tests/owner_search_browser.cjs
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          node tests/unified_inboxes_browser.cjs
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           node tests/cloud_mail_browser.cjs
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
   aws-mail:

@@ -72,7 +72,8 @@
   #sidebar-footer { margin-top: auto; display: flex; flex-direction: column; gap: 4px; }
 
   /* ---- Accounts (sidebar switcher) ---- */
-  #accounts { display: flex; flex-direction: column; gap: 2px; margin-bottom: 10px; }
+  .folder[hidden] { display: none; }
+  #accounts { max-height: 38vh; overflow-y: auto; flex-shrink: 0; display: flex; flex-direction: column; gap: 2px; margin-bottom: 10px; }
   .account {
     display: flex; align-items: center; gap: 9px;
     padding: 7px 12px; border-radius: 8px;
@@ -448,7 +449,6 @@
 
     <div id="sidebar-footer">
       <button class="folder" id="agent-btn" data-workspace="job">Agent setup</button>
-      <button class="folder" id="aws-inbox-btn">Extra Life Records inbox</button>
       <button class="folder" id="settings-btn">
         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09a1.65 1.65 0 0 0-1-1.51 1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09a1.65 1.65 0 0 0 1.51-1 1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33h.01a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51h.01a1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82v.01a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
         Settings
@@ -540,6 +540,7 @@
       <h2>Settings</h2>
       <div class="acct-toolbar">
         <select id="set-account-picker"></select>
+        <button type="button" id="cloud-reconnect" class="outline" hidden>Reconnect employee mailboxes</button>
         <button class="outline" id="acct-add-btn">+ Add account</button>
         <button class="outline secondary" id="acct-remove-btn">Remove</button>
       </div>
