@@ -29,6 +29,7 @@ import html as html_lib
 from html.parser import HTMLParser
 from mail_credentials import unlock_account, write_config
 from window_state import load_placement, remember_window
+from cloud_accounts import CloudAccounts, route_cloud
 
 # ---------------------------------------------------------------------------
 # pythonnet / pywebview environment (must be set BEFORE importing webview)
@@ -54,7 +55,7 @@ else:
     _WEBVIEW_IMPORT_ERROR = None
 
 APP_NAME = "SimpleMail"
-APP_VERSION = "1.9.0"
+APP_VERSION = "1.9.1"
 APP_REPO = "Extra-Life-Records/SimpleMail"  # owner/repo for auto-updates
 CONFIG_DIR = Path(os.environ.get("APPDATA", str(Path.home()))) / APP_NAME
 CONFIG_FILE = CONFIG_DIR / "config.json"
@@ -1092,10 +1093,16 @@ _API_WINDOW = None  # set in main(); kept module-level so pywebview's
 
 
 class Api:
-    def open_aws_inbox(self):
-        """Separate authenticated provider; existing IMAP accounts are unchanged."""
-        from cloud_mail import open_inbox
-        return open_inbox(CONFIG_DIR)
+    def _cloud_accounts(self):
+        if not hasattr(self, '_cloud_provider'):
+            from cloud_mail import CloudMail
+            self._cloud_provider = CloudAccounts(CloudMail(CONFIG_DIR), self)
+        self._cloud_provider.transport._window = _API_WINDOW
+        return self._cloud_provider
+
+    def connect_cloud_accounts(self):
+        self._cloud_accounts().transport.cloud_login()
+        return self._cloud_accounts().discover()
 
     def __init__(self, cfg):
         self.cfg = cfg
@@ -1113,6 +1120,13 @@ class Api:
     def _acct(self, account_id):
         """Resolve an account id to its config. Raises on unknown ids -
         NO fallback account, ever. A fallback is how mail crosses accounts."""
+        if str(account_id).startswith('cloud:'):
+            provider = self._cloud_accounts()
+            if account_id not in provider.accounts:
+                provider.discover()
+            if account_id not in provider.accounts:
+                raise KeyError('Mailbox is not available to this sign-in')
+            return provider.accounts[account_id]
         return self.cfg.account(account_id)
 
     def get_config(self):
@@ -1143,7 +1157,16 @@ class Api:
                 "signature": acct.get("signature", ""),
                 "rules": acct.get("rules", {}),
             })
+        cloud_error = None
+        cloud_configured = self._cloud_accounts().transport.cloud_config()['configured']
+        if cloud_configured:
+            try:
+                accounts.extend(self._cloud_accounts().discover())
+            except Exception:
+                cloud_error = 'Employee mailboxes need reconnecting in Settings.'
         return {
+            "cloud_configured": cloud_configured,
+            "cloud_error": cloud_error,
             "accounts": accounts,
             "active_account": cfg.data.get("active_account", ""),
             "ui_scale": cfg["ui_scale"],
@@ -1151,6 +1174,7 @@ class Api:
             "arch": current_arch(),
         }
 
+    @route_cloud
     def get_folders(self, account_id):
         """Folder list + unread badges for ONE account."""
         self._log(f"CALL get_folders {account_id}")
@@ -1189,6 +1213,8 @@ class Api:
         accounts = []
         seen_ids = set()
         for raw in incoming:
+            if str(raw.get("id", "")).startswith("cloud:") or raw.get("provider") == "cloud":
+                continue
             acct = normalize_account(raw)
             while acct["id"] in seen_ids:  # keep ids unique
                 acct["id"] += "-2"
@@ -1247,6 +1273,7 @@ class Api:
             acct["_locked_credentials"] = locked
         return acct
 
+    @route_cloud
     def list_messages(self, account_id, server_folder):
         self._log(f"CALL list_messages {account_id} {server_folder}")
         acct = self._acct(account_id)
@@ -1279,6 +1306,7 @@ class Api:
             "auto_moved": moved, "validity": validity,
         }
 
+    @route_cloud
     def search_messages(self, account_id, query, cursor=None, server_folder=None):
         from mailbox_agent import MailboxAgent, unpack
         self._acct(account_id)
@@ -1305,6 +1333,7 @@ class Api:
                                   'seen':True, 'snippet':'Drafts · Saved on this device'})
         return {**page, 'items':items}
 
+    @route_cloud
     def get_message(self, account_id, server_folder, uid, validity=None):
         self._log(f"CALL get_message {account_id} {server_folder} {uid}")
         acct = self._acct(account_id)
@@ -1330,6 +1359,7 @@ class Api:
         owner = MailboxAgent(self.cfg, self._agent_store(), account_id, owner_access=True)
         return owner.thread(message_ref, cursor=cursor, limit=5, max_chars=10000)
 
+    @route_cloud
     def send_mail(self, account_id, to, subject, body, body_html=None):
         """Send as the given account. The From identity comes from the
         account config alone - there is deliberately no from parameter."""
@@ -1354,6 +1384,7 @@ class Api:
         self._acct(account_id)
         return self._attachment_store().add_base64(account_id, name, encoded)
 
+    @route_cloud
     def get_compose_context(self, account_id, server_folder, uid, reply_all=False, forward=False, validity=None):
         from mail_attachments import reply_context, MAX_TOTAL
         from mailbox_agent import clean_string
@@ -1424,6 +1455,7 @@ class Api:
         self._acct(account_id)
         return self._compose_store().discard(account_id, draft_id, revision)
 
+    @route_cloud
     def send_compose_draft(self, account_id, draft_id, revision):
         from mailbox_agent import recipients
         acct = self._acct(account_id)
@@ -1574,16 +1606,19 @@ class Api:
         save_draft_message(acct, to, subject, body, body_html=body_html)
         return {"ok": True}
 
+    @route_cloud
     def mark_all_read(self, account_id, server_folder):
         self._log(f"CALL mark_all_read {account_id} {server_folder}")
         count = mark_all_read(self._acct(account_id), server_folder)
         return {"count": count}
 
+    @route_cloud
     def set_seen(self, account_id, server_folder, uid, seen, validity=None):
         self._log(f"CALL set_seen {account_id} {server_folder} {uid} seen={seen}")
         set_seen(self._acct(account_id), server_folder, uid, bool(seen), validity)
         return {"ok": True}
 
+    @route_cloud
     def save_attachment(self, account_id, server_folder, uid, part_index, validity=None):
         self._log(f"CALL save_attachment {account_id} {server_folder} {uid} part={part_index}")
         path = save_attachment(self._acct(account_id), server_folder, uid, int(part_index), validity)
@@ -1611,10 +1646,12 @@ class Api:
         data_uri = f"data:{mime};base64,{base64.b64encode(path.read_bytes()).decode('ascii')}"
         return {"name": path.name, "data_uri": data_uri}
 
+    @route_cloud
     def delete_message(self, account_id, server_folder, uid, validity=None):
         self._log(f"CALL delete_message {account_id} {server_folder} {uid}")
         return delete_message(self._acct(account_id), server_folder, uid, validity)
 
+    @route_cloud
     def move_message(self, account_id, server_folder, uid, target, sender="", learn=False, validity=None):
         self._log(f"CALL move_message {account_id} {server_folder} {uid} -> {target} learn={learn}")
         domain = sender_domain(sender) if learn and sender else None
@@ -1647,6 +1684,7 @@ class Api:
             remove_rule(self.cfg, account_id, domain)
         return undo(account, store, action_id, connect_imap)
 
+    @route_cloud
     def create_folder(self, account_id, name):
         self._log(f"CALL create_folder {account_id} {name}")
         create_folder(self._acct(account_id), name)

@@ -169,3 +169,18 @@ publish_arm64.bat     Build ARM64 exe + upload to a GitHub release
   `mail.livemail.co.uk`, *not* `imap.1and1.co.uk`.
 - **Credentials** are saved plaintext in `%APPDATA%\SimpleMail\config.json`.
   Don't share that file.
+
+
+### Unified employee inboxes
+
+Configured AWS employee mailboxes now appear in the main account sidebar alongside
+IMAP accounts. They use the same message list, reader, search, reply/forward composer,
+attachment downloads and local draft recovery. Their saved Windows-protected login
+is reused; Settings provides **Reconnect employee mailboxes** when it expires.
+There is no separate desktop inbox window. The standalone web inbox remains available.
+
+AWS sending remains disabled until regional sending approval and sender authentication
+are verified. Composing and saving a draft does not send it. Cloud mailboxes currently
+use the five standard folders; automatic filing, conversation history and the IMAP
+agent worker are not enabled for them. Messages can be restored by moving them from
+Trash back to Inbox. Existing IMAP credentials and agent settings are preserved.

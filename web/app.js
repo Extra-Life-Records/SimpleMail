@@ -17,10 +17,6 @@ function activeAccount() {
 
 const $ = (id) => document.getElementById(id);
 
-document.getElementById('aws-inbox-btn')?.addEventListener('click', async () => {
-  try { await api.open_aws_inbox(); } catch (error) { alert(String(error)); }
-});
-
 const MAIL_REFRESH_MS = 30000;
 let mailboxView = { requests: 0, loads: 0, actions: 0 };
 let messageReadRequest = 0;
@@ -122,6 +118,7 @@ function toast(msg, isError = false) {
 
 function filingToast(accountId, result, message) {
   toast(message);
+  if (!result.action_id) return;
   const button = document.createElement('button');
   button.textContent = 'Undo';
   button.style.cssText = 'margin:0 0 0 12px;padding:2px 10px;width:auto';
@@ -212,6 +209,7 @@ async function selectAccount(accountId) {
   if (!state.accounts.some((a) => a.id === accountId)) return;
   const view = resetMailboxView();
   state.activeAccountId = accountId;
+  for (const id of ["agent-btn", "needs-you-btn", "activity-btn"]) $(id).hidden = activeAccount()?.provider === "cloud";
   state.folders = [];
   state.currentFolder = "inbox";
   state.selectedUid = null;
@@ -714,12 +712,13 @@ function removeAccount() {
 
 async function openSettings() {
   const cfg = await api.get_config();
-  editAccounts = (cfg.accounts || []).map((a) => ({ ...a }));
+  editAccounts = (cfg.accounts || []).filter(a => a.provider !== "cloud").map((a) => ({ ...a }));
   if (!editAccounts.length) editAccounts = [{ ...BLANK_ACCOUNT }];
   const activeIdx = editAccounts.findIndex((a) => a.id === cfg.active_account);
   $("set-scale").value = cfg.ui_scale || "default";
   $("set-version").textContent = cfg.version || "?";
   showAccountForm(activeIdx >= 0 ? activeIdx : 0);
+  $("cloud-reconnect").hidden = !cfg.cloud_configured;
   $("settings-backdrop").classList.add("show");
 }
 
@@ -830,6 +829,13 @@ async function init() {
   $("draft-btn").addEventListener("click", saveDraft);
   $("cancel-btn").addEventListener("click", discardCompose);
   $("settings-btn").addEventListener("click", openSettings);
+  $("cloud-reconnect").addEventListener("click", async () => {
+    $("cloud-reconnect").disabled = true;
+    toast("Complete sign-in in your browser, then return here.");
+    try { await api.connect_cloud_accounts(); await reloadAccounts(); toast("Mailboxes connected"); }
+    catch (e) { toast(String(e), true); }
+    finally { $("cloud-reconnect").disabled = false; }
+  });
   $("agent-btn").addEventListener("click", () => openAgent("job"));
   $("settings-save").addEventListener("click", saveSettings);
   $("settings-cancel").addEventListener("click", () => {
@@ -882,6 +888,7 @@ async function init() {
       return;
     }
     state.accounts = data.accounts;
+    if (data.cloud_error) toast(data.cloud_error, true);
     applyScale(data.ui_scale || "default");
     const startId = state.accounts.some((a) => a.id === data.active_account)
       ? data.active_account : state.accounts[0].id;
@@ -931,7 +938,7 @@ async function markUnread() {
 async function deleteSelected() {
   if (mailboxView.actions) { toast("Wait for the current mail action to finish"); return; }
   if (!state.selectedUid) return;
-  if (!confirm("Move this message to Trash? You can undo it in Activity.")) return;
+  if (!confirm(activeAccount()?.provider === "cloud" ? "Move this message to Trash? You can move it back from Trash." : "Move this message to Trash? You can undo it in Activity.")) return;
   const folder = messageLocation(state.messages.find(m => m.uid === state.selectedUid));
   const view = mailboxView;
   const uid = state.selectedUid;
@@ -1021,7 +1028,7 @@ function openCtxMenu(x, y, uid) {
     </div>`;
   });
   html += `<div class="ctx-sep"></div>
-    <div class="ctx-item" data-act="newfolder">📁 New folder…</div>
+${activeAccount()?.provider === "cloud" ? "" : '<div class="ctx-item" data-act="newfolder">📁 New folder…</div>'}
     <div class="ctx-item" data-act="unread">🔵 Mark unread</div>
     <div class="ctx-item" data-act="delete" style="color:#b91c1c">🗑 Move to Trash</div>`;
   menu.innerHTML = html;

@@ -146,13 +146,4 @@ class CloudMail:
         target = self._window.create_file_dialog(webview.SAVE_DIALOG, save_filename=name)
         if target:
             Path(target if isinstance(target, str) else target[0]).write_bytes(payload)
-        return {'saved': bool(target)}
-
-
-def open_inbox(directory):
-    import webview
-    api = CloudMail(directory)
-    api._window = webview.create_window('Extra Life Records Mail - SimpleMail',
-        str(Path(__file__).parent / 'cloud' / 'src' / 'static' / 'index.html'), js_api=api,
-        width=1180, height=800, min_size=(760, 600))
-    return {'ok': True}
+        return {'saved': bool(target), 'path': (target if isinstance(target, str) else target[0]) if target else ''}
