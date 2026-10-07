@@ -32,6 +32,25 @@ class MailTests(unittest.TestCase):
         return service.dispatch(self.table,self.s3,self.ses,subject,method,path,data or {},query or {})
     def assign(self,name,subject,generation='first'):
         self.table.put_item(Item={'pk':name,'sk':'META','generation':generation,'state':'Assigned','subject':subject})
+    def test_html_invitation_retains_button_and_plain_text_url(self):
+        msg = EmailMessage()
+        msg.set_content('<p>Join us</p><a href="https://example.com/invite?token=fixture">Accept invite</a><a href="javascript:alert(1)">Bad</a><script>hidden</script>', subtype='html')
+        parsed = service.parse(msg.as_bytes())
+        self.assertIn('href="https://example.com/invite?token=fixture"', parsed['html'])
+        self.assertIn('https://example.com/invite?token=fixture', parsed['body'])
+        self.assertNotIn('javascript:', parsed['body'])
+        self.assertNotIn('hidden', parsed['body'])
+
+    def test_multipart_keeps_html_but_excludes_html_attachment(self):
+        msg = EmailMessage(); msg.set_content('Plain alternative')
+        msg.add_alternative('<a href="https://example.com/accept">Accept</a>', subtype='html')
+        msg.add_attachment(b'<b>attachment only</b>', maintype='text', subtype='html', filename='file.html')
+        parsed = service.parse(msg.as_bytes())
+        self.assertEqual(parsed['body'].strip(), 'Plain alternative')
+        self.assertIn('https://example.com/accept', parsed['html'])
+        self.assertNotIn('attachment only', parsed['html'])
+        self.assertEqual(len(parsed['attachments']), 1)
+
     def test_reserved_visible_only_to_owner(self):
         self.assertEqual(len(self.call(path='/mailboxes')['mailboxes']),5)
         self.assertEqual(self.call(subject='employee',path='/mailboxes')['mailboxes'],[])

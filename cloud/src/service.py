@@ -83,6 +83,7 @@ def message(table, item, mid):
 def parse(raw, maximum=500000):
     msg = message_from_bytes(raw, policy=default)
     text = []
+    html = []
     attachments = []
     for index, part in enumerate(msg.walk()):
         if part.is_multipart():
@@ -93,7 +94,10 @@ def parse(raw, maximum=500000):
                                 'size': len(part.get_payload(decode=True) or b'')})
         elif part.get_content_type() == 'text/plain':
             text.append(str(part.get_content()))
-    # Plain text only: no remote images, scripts, tracking pixels, or active HTML.
+        elif part.get_content_type() == 'text/html':
+            html.append(str(part.get_content()))
+    # Keep original HTML for the desktop sandboxed, sanitized reader.
+    # Plain-text consumers also retain safe action URLs instead of losing links.
     if not text:
         from html.parser import HTMLParser
         class Text(HTMLParser):
@@ -101,6 +105,14 @@ def parse(raw, maximum=500000):
                 super().__init__(); self.parts = []; self.hidden = 0
             def handle_starttag(self, tag, attrs):
                 if tag in ('script', 'style'): self.hidden += 1
+                if tag == 'a' and not self.hidden:
+                    href = dict(attrs).get('href', '').strip()
+                    from urllib.parse import urlsplit
+                    try:
+                        safe = urlsplit(href).scheme.lower() in ('https', 'http', 'mailto')
+                    except ValueError:
+                        safe = False
+                    if safe: self.parts.append(' [' + href + '] ')
             def handle_endtag(self, tag):
                 if tag in ('script', 'style'): self.hidden = max(0, self.hidden - 1)
                 if tag in ('p', 'div', 'br'): self.parts.append('\n')
@@ -115,6 +127,7 @@ def parse(raw, maximum=500000):
             'reply_to': str(msg.get('Reply-To', msg.get('From', ''))),
             'date': str(msg.get('Date', '')), 'message_id': str(msg.get('Message-ID', '')),
             'body': body[:maximum] if maximum else body, 'body_truncated': bool(maximum and len(body) > maximum),
+            'html': '\n'.join(html)[:500000] or None,
             'attachments': attachments}
 
 
