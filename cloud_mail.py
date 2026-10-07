@@ -85,8 +85,8 @@ class CloudMail:
         class Callback(BaseHTTPRequestHandler):
             def log_message(self, *args): pass
             def do_GET(self):
-                params = parse_qs(urlsplit(self._path).query)
-                valid = (urlsplit(self._path).path == '/callback' and params.get('state') == [state]
+                params = parse_qs(urlsplit(self.path).query)
+                valid = (urlsplit(self.path).path == '/callback' and params.get('state') == [state]
                          and self.headers.get('Host') == 'localhost:8765' and params.get('code'))
                 if valid: answer['code'] = params['code'][0]
                 self.send_response(200 if valid else 400)
