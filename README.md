@@ -19,6 +19,7 @@ owner's x64 machine and is published with native x64 and ARM64 downloads.
 
 - ✅ **Inbox, Needs you, Activity** — main navigation; other mail folders are under Folders
 - ✅ **Real HTML email rendering** (sandboxed; remote images blocked until Load images)
+
 - ✅ **Compose with signature** — set it once in Settings, auto-appended
 - ✅ **Automatic local draft saving and recovery**; keep or discard
   drafts and resume them from Drafts after restarting. New human drafts are saved
@@ -37,6 +38,12 @@ owner's x64 machine and is published with native x64 and ARM64 downloads.
 - ✅ Credentials protected with Windows DPAPI; settings stored locally in `%APPDATA%\SimpleMail`
 - ✅ Connection test button in Settings
 - ✅ Native ARM64 and x64 builds from the same codebase
+
+**Load images** downloads bounded public raster images through the desktop app
+and displays them inside the sandbox. This also handles senders whose image
+servers forbid direct embedding. Downloads send no cookies or referrer, block
+private network destinations and recheck redirects. Failed images can be retried;
+permission resets when you open another message.
 
 ## How it connects
 

@@ -451,10 +451,25 @@ async function openMessage(uid, el) {
       images.className = "outline secondary";
       images.textContent = "Load images";
       images.title = "Allow remote images for this message";
-      images.onclick = () => {
+      images.onclick = async () => {
         if (view !== mailboxView || request !== messageReadRequest || state.selectedUid !== uid) return;
-        iframe.srcdoc = sanitizeHtml(msg.html, true);
-        images.remove();
+        images.disabled = true;
+        images.textContent = "Loading images…";
+        try {
+          const result = await api.load_message_images(accountId, folder.server, folder.uid, folder.validity);
+          if (view !== mailboxView || request !== messageReadRequest || state.selectedUid !== uid) return;
+          iframe.srcdoc = sanitizeHtml(msg.html, true, null, result.images);
+          if (result.failed) {
+            images.textContent = "Retry images";
+            toast("Some images could not be loaded. You can try again.", true);
+          } else images.remove();
+        } catch (e) {
+          if (view !== mailboxView || request !== messageReadRequest || state.selectedUid !== uid) return;
+          images.textContent = "Retry images";
+          toast("Images could not be loaded. You can try again.", true);
+        } finally {
+          images.disabled = false;
+        }
       };
       if (imageInfo.hasRemoteImages) $("read-body").appendChild(images);
       $("read-body").appendChild(iframe);
@@ -1143,7 +1158,7 @@ async function doUpdate() {
 
 /* ---------------- sanitize (keep it light - sandbox iframe does the heavy lifting) ---------------- */
 
-function sanitizeHtml(html, allowImages = false, imageInfo = null) {
+function sanitizeHtml(html, allowImages = false, imageInfo = null, loadedImages = {}) {
   // Template content stays inert during parsing, including resource fetching.
   const template = document.createElement("template");
   template.innerHTML = String(html);
@@ -1160,13 +1175,16 @@ function sanitizeHtml(html, allowImages = false, imageInfo = null) {
       if (!allowed.test(property) || /url\s*\(|image-set|var\s*\(|\\/i.test(el.style.getPropertyValue(property))) el.style.removeProperty(property);
     }
   });
+  const resolvedImages = new Map(Object.entries(loadedImages || {}).map(([url, data]) => [safeEmailLink(url), data]));
   doc.querySelectorAll("img").forEach(img => {
     const raw = img.getAttribute("src") || "";
     const embedded = /^data:image\/(png|gif|jpeg|webp|avif|bmp);base64,[a-z0-9+/=\s]+$/i.test(raw);
     const remote = safeEmailLink(raw);
+    const loaded = allowImages && resolvedImages.get(remote);
+    const loadedRaster = /^data:image\/(png|gif|jpeg|webp|avif|bmp);base64,[a-z0-9+/=\s]+$/i.test(loaded || "");
     if (imageInfo && remote && /^https?:/i.test(remote)) imageInfo.hasRemoteImages = true;
-    if (!embedded && !(allowImages && remote && /^https?:/i.test(remote))) img.removeAttribute("src");
-    else if (!embedded) img.setAttribute("src", remote);
+    if (loadedRaster) img.setAttribute("src", loaded);
+    else if (!embedded) img.removeAttribute("src");
     img.setAttribute("referrerpolicy", "no-referrer");
   });
   doc.querySelectorAll("a,area").forEach((link) => {
@@ -1180,7 +1198,7 @@ function sanitizeHtml(html, allowImages = false, imageInfo = null) {
       link.removeAttribute("target");
     }
   });
-  const policy = `default-src 'none'; img-src data:${allowImages ? " https: http:" : ""}; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'`;
+  const policy = "default-src 'none'; img-src data:; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'";
   return `<!doctype html><html><head><meta http-equiv="Content-Security-Policy" content="${policy}"><meta name="referrer" content="no-referrer"><style>html,body,body *{-webkit-user-select:text!important;user-select:text!important}body{overflow-wrap:anywhere}img{max-width:100%}</style></head><body>${template.innerHTML}</body></html>`;
 }
 

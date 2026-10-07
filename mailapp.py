@@ -55,7 +55,7 @@ else:
     _WEBVIEW_IMPORT_ERROR = None
 
 APP_NAME = "SimpleMail"
-APP_VERSION = "1.9.2"
+APP_VERSION = "1.9.3"
 APP_REPO = "Extra-Life-Records/SimpleMail"  # owner/repo for auto-updates
 CONFIG_DIR = Path(os.environ.get("APPDATA", str(Path.home()))) / APP_NAME
 CONFIG_FILE = CONFIG_DIR / "config.json"
@@ -1093,6 +1093,11 @@ _API_WINDOW = None  # set in main(); kept module-level so pywebview's
 
 
 class Api:
+    def load_message_images(self, account_id, folder, uid, validity=None):
+        from mail_images import load_remote_images
+        message = self.get_message(account_id, folder, uid, validity)
+        return load_remote_images(message.get("html") or "")
+
     def _cloud_accounts(self):
         if not hasattr(self, '_cloud_provider'):
             from cloud_mail import CloudMail
