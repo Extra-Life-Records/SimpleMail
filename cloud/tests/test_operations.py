@@ -2,6 +2,8 @@ import contextlib
 import importlib.util
 import io
 import json
+import subprocess
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -9,6 +11,14 @@ from unittest.mock import patch
 
 spec=importlib.util.spec_from_file_location('routing',Path(__file__).parents[1]/'cloudflare_routes.py')
 routing=importlib.util.module_from_spec(spec);spec.loader.exec_module(routing)
+
+
+class CommandLineTests(unittest.TestCase):
+    def test_admin_help_starts_from_cloud_directory(self):
+        result = subprocess.run([sys.executable, 'mailbox_admin.py', '--help'],
+            cwd=Path(__file__).parents[1], capture_output=True, text=True, timeout=15)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn('reserve', result.stdout)
 
 
 class RoutingTests(unittest.TestCase):

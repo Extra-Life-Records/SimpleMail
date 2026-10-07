@@ -10,7 +10,7 @@ accounts have been changed. Live acceptance remains required before release.
   in the sandbox; London newsletter approval does not apply to Ireland.
 - The saved newsletter credential was denied receipt-rule and CloudFormation reads.
   Do not broaden or repurpose that production key.
-- AWS Console and Cloudflare require owner sign-in. Use an appropriate temporary
+- AWS Console and Cloudflare owner sessions are available. Use an appropriate temporary
   AWS operator profile and scoped Cloudflare access for deployment.
 - A real employee is required for the assignment/Claude pilot.
 
@@ -19,7 +19,7 @@ accounts have been changed. Live acceptance remains required before release.
 SAM defines SES receiving -> private versioned S3 -> SNS -> Lambda -> DynamoDB,
 Cognito with required TOTP MFA, JWT-authorized HTTP API, web UI, delivery/bounce
 events, bounded logs, failure queue and $5/$10/$20 account budget notifications.
-Budgets notify; they do not cap spending. Outbound mail defaults to disabled.
+Budgets notify; they do not cap spending. Outbound mail defaults to disabled. API reserved concurrency defaults to zero (shared account capacity) so small regional quotas work; API throttling remains enabled.
 
 Addresses `one` through `five` at playloudr.com have Reserved, Assigned and Disabled
 states. Reserved has no employee credentials. Only the explicit owner can inspect
@@ -63,7 +63,7 @@ or backup restoration. Keep real evidence under ignored `.deployment/` without s
 ## Receiving deployment sequence
 
 1. Install AWS SAM CLI from AWS and use a temporary operator profile. Run
-   `python cloud/operator.py --profile <operator-profile> preflight` and preserve
+   `python cloud/mailbox_admin.py --profile <operator-profile> preflight` and preserve
    existing receipt rules. Only one receipt ruleset can be active per region.
 2. Run `sam build --template-file cloud/template.yaml` and
    `sam deploy --guided --region eu-west-1 --profile <operator-profile>`. Use stack
@@ -73,7 +73,7 @@ or backup restoration. Keep real evidence under ignored `.deployment/` without s
    `http://localhost:8765/callback` remains registered alongside it.
 4. Create the owner's Cognito user using an existing reachable company email.
    Owner completes invitation, password and TOTP. Run
-   `python cloud/operator.py --profile <operator-profile> reserve --owner-sub <verified-owner-sub>`.
+   `python cloud/mailbox_admin.py --profile <operator-profile> reserve --owner-sub <verified-owner-sub>`.
 5. Add SES-issued verification/DKIM records for inbox.playloudr.com and MX
    `10 inbound-smtp.eu-west-1.amazonaws.com` on that subdomain only. Keep apex
    Cloudflare MX and the existing hello@playloudr.com route intact.
@@ -115,11 +115,11 @@ Any production-access request must truthfully describe employee correspondence.
 ## Assignment
 
 ```powershell
-python cloud/operator.py --profile <operator-profile> assign one --login-email <employee-reachable-email>
-python cloud/operator.py --profile <operator-profile> disable one
+python cloud/mailbox_admin.py --profile <operator-profile> assign one --login-email <employee-reachable-email>
+python cloud/mailbox_admin.py --profile <operator-profile> disable one
 # Following offboarding review; old history is retained separately:
-python cloud/operator.py --profile <operator-profile> reserve-again one
-python cloud/operator.py --profile <operator-profile> connection
+python cloud/mailbox_admin.py --profile <operator-profile> reserve-again one
+python cloud/mailbox_admin.py --profile <operator-profile> connection
 ```
 
 Cognito delivers the employee invitation; the operator never chooses or prints

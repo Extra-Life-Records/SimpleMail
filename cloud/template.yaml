@@ -18,6 +18,11 @@ Parameters:
     Type: String
     Default: 'false'
     AllowedValues: ['true', 'false']
+  ApiReservedConcurrency:
+    Type: Number
+    Default: 0
+    MinValue: 0
+    Description: Zero uses the account pool; reserve capacity only when the regional quota permits it.
   CreateSendingIdentity:
     Type: String
     Default: 'false'
@@ -41,6 +46,7 @@ Globals:
         DOMAIN: !Ref Domain
         RECEIVE_DOMAIN: !Ref ReceiveDomain
 Conditions:
+  ReserveApiCapacity: !Not [!Equals [!Ref ApiReservedConcurrency, 0]]
   WebCallbackConfigured: !Not [!Equals [!Ref CallbackUrl, 'http://localhost:8765/callback']]
   NewSendingIdentity: !Equals [!Ref CreateSendingIdentity, 'true']
 Resources:
@@ -164,7 +170,7 @@ Resources:
     Properties:
       Handler: service.api
       MemorySize: 512
-      ReservedConcurrentExecutions: 5
+      ReservedConcurrentExecutions: !If [ReserveApiCapacity, !Ref ApiReservedConcurrency, !Ref 'AWS::NoValue']
       Environment:
         Variables: {SENDING_ENABLED: !Ref SendingEnabled, CONFIGURATION_SET: !Ref SendingConfiguration}
       Policies:
