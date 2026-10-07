@@ -23,7 +23,13 @@ the inbox branding. Keep SendingEnabled=false until the new sending identity,
 DKIM, return path and regional approval have been verified. The earlier Playloudr
 DNS/routing instructions below describe the original pilot, not instructions to
 replace Extra Life Records MX records. Its Cloudflare routing script is not used
-for this migration. Delivery verification for the new addresses is recorded separately.
+for this migration. All five new public addresses received real Gmail test messages, verified in
+DynamoDB and the owner web inbox. The first test reached one; two through five
+returned explicit Fasthosts provisioning failures and a later labelled retest
+reached all four. CloudFormation updates completed, with public Domain set to
+extraliferecords.com and Extra Life Records branding verified live. Evidence is
+saved under ignored `.deployment/extralife-*`. Outbound sending remains disabled;
+no employee login or Claude invitation has been created.
 
 ## Original pilot deployment evidence, 7 October 2026
 
