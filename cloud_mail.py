@@ -152,7 +152,7 @@ class CloudMail:
 def open_inbox(directory):
     import webview
     api = CloudMail(directory)
-    api._window = webview.create_window('Playloudr Mail Â· SimpleMail',
+    api._window = webview.create_window('Extra Life Records Mail - SimpleMail',
         str(Path(__file__).parent / 'cloud' / 'src' / 'static' / 'index.html'), js_api=api,
         width=1180, height=800, min_size=(760, 600))
     return {'ok': True}

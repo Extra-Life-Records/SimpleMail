@@ -1,4 +1,4 @@
-# Playloudr reserved mailbox pilot
+# Extra Life Records reserved mailbox pilot
 
 **Receiving pilot deployed; not ready for employee use.** This branch implements
 the AWS backend, web inbox and SimpleMail provider window. Five reserved inboxes
@@ -7,7 +7,25 @@ work. MFA enrollment confirmation, outbound mail and installed SimpleMail accept
 remain pending. No employee or
 Claude accounts have been created.
 
-## Deployment evidence, 7 October 2026
+## Company domain switch, 7 October 2026
+
+The owner requested employee addresses at **extraliferecords.com**. Fasthosts
+receives that domain's mail; its existing apex MX and hello, pippy and playloudr
+mailboxes must remain unchanged. Five new exact Fasthosts forwarders connect
+one through five at extraliferecords.com to the corresponding existing private
+AWS inboxes at inbox.playloudr.com. The latter is an internal transport domain;
+employees use the Extra Life Records addresses. No extra mailbox purchase or
+Claude domain addition is required for this route.
+
+Keep the existing AWS stack, receiving domain, user pool, owner login and stored
+mail. Change only the public Domain parameter to extraliferecords.com and update
+the inbox branding. Keep SendingEnabled=false until the new sending identity,
+DKIM, return path and regional approval have been verified. The earlier Playloudr
+DNS/routing instructions below describe the original pilot, not instructions to
+replace Extra Life Records MX records. Its Cloudflare routing script is not used
+for this migration. Delivery verification for the new addresses is recorded separately.
+
+## Original pilot deployment evidence, 7 October 2026
 
 - Ireland SES: `ProductionAccessEnabled=false`, `SendingEnabled=true`. It remains
   in the sandbox; London newsletter approval does not apply to Ireland.
@@ -48,7 +66,7 @@ Cognito with required TOTP MFA, JWT-authorized HTTP API, web UI, delivery/bounce
 events, bounded logs, failure queue and $5/$10/$20 account budget notifications.
 Budgets notify; they do not cap spending. Outbound mail defaults to disabled. API reserved concurrency defaults to zero (shared account capacity) so small regional quotas work; API throttling remains enabled.
 
-Addresses `one` through `five` at playloudr.com have Reserved, Assigned and Disabled
+Addresses `one` through `five` at extraliferecords.com have Reserved, Assigned and Disabled
 states. Reserved has no employee credentials. Only the explicit owner can inspect
 reservations. Every API read, search, download and send checks the current assignment.
 New assignments have separate history namespaces, including for delayed retries.
@@ -67,7 +85,7 @@ Send claims are durable and uncertain outcomes never automatically retry.
 The UI persists the request reference across reloads and saves the draft first.
 SES acceptance, delivery, bounce and complaint are separate recorded states.
 
-SimpleMail's **Playloudr AWS inbox** button opens the same interface with a Python
+SimpleMail's **Extra Life Records inbox** button opens the same interface with a Python
 provider adapter. Sign-in uses the system browser, authorization code and PKCE.
 Windows DPAPI protects the refresh session. Clients receive no AWS keys. The web
 UI stores refresh sessions in sessionStorage and revokes them on sign-out.
@@ -156,7 +174,7 @@ history never transfer. Disable/revoke the former employee's Cognito account and
 refresh sessions during offboarding as well. Conditional updates reject concurrent
 assignments. The connection command prints only public client configuration.
 
-For the first real hire, add playloudr.com to Claude's allowed domains and invite
+For the first real hire, use the existing extraliferecords.com Claude domain and invite
 them as Member/Premium. They handle verification and terms. Owner plus four employees
 fills five seats; the fifth email may remain reserved. Invitations expire after
 21 days. Never transfer an old employee's Claude account or history.

@@ -1,10 +1,10 @@
 AWSTemplateFormatVersion: '2010-09-09'
 Transform: AWS::Serverless-2016-10-31
-Description: Private Playloudr reserved mailboxes (pilot; routing enabled separately)
+Description: Private Extra Life Records reserved mailboxes (pilot; routing enabled separately)
 Parameters:
   Domain:
     Type: String
-    Default: playloudr.com
+    Default: extraliferecords.com
   ReceiveDomain:
     Type: String
     Default: inbox.playloudr.com
