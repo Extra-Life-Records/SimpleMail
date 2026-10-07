@@ -1,8 +1,10 @@
 # Playloudr reserved mailbox pilot
 
-**Not deployed or ready for employee use.** This branch implements the AWS backend,
-web inbox and SimpleMail provider window. No public routing or employee/Claude
-accounts have been changed. Live acceptance remains required before release.
+**Receiving pilot deployed; not ready for employee use.** This branch implements
+the AWS backend, web inbox and SimpleMail provider window. Five reserved inboxes
+received real Gmail tests with attachments. Public forwarding, owner login acceptance,
+outbound mail and installed SimpleMail acceptance remain pending. No employee or
+Claude accounts have been created.
 
 ## Deployment evidence, 7 October 2026
 
@@ -13,6 +15,22 @@ accounts have been changed. Live acceptance remains required before release.
 - AWS Console and Cloudflare owner sessions are available. Use an appropriate temporary
   AWS operator profile and scoped Cloudflare access for deployment.
 - A real employee is required for the assignment/Claude pilot.
+- Stack `playloudr-reserved-mail` deployed in Ireland, including the web callback.
+  Both SES identities verified. Nine additive Cloudflare DNS records published;
+  apex MX and existing hello/rewards routes preserved.
+- Five subdomain Gmail deliveries reached separate mailbox generations. Each had
+  a 61-byte `pilot-check.txt` attachment and passing spam, virus, SPF, DKIM and DMARC
+  verdicts. Evidence is saved under ignored `.deployment/`.
+- Five Cloudflare destinations registered, pending verification. Public forwarders
+  are not enabled. Owner invitation sent to hello@extraliferecords.com; password
+  and TOTP setup must be completed by the owner.
+- Initial deployment rolled back because reserving Lambda concurrency exceeded the
+  account's small regional quota. The corrected template uses shared capacity by
+  default. The old empty table/user pool and bucket with AWS's setup notification
+  were retained; reconcile these pilot leftovers before final rollout. The sending
+  identity was retained and is currently managed outside the replacement stack.
+- Renamed `operator.py` to `mailbox_admin.py` to avoid shadowing Python's standard
+  library when running from `cloud/`. A subprocess regression verifies CLI startup.
 
 ## Implemented architecture
 
@@ -67,7 +85,7 @@ or backup restoration. Keep real evidence under ignored `.deployment/` without s
    existing receipt rules. Only one receipt ruleset can be active per region.
 2. Run `sam build --template-file cloud/template.yaml` and
    `sam deploy --guided --region eu-west-1 --profile <operator-profile>`. Use stack
-   `playloudr-mail`, unique AuthDomain, budget email hello@extraliferecords.com and
+   `playloudr-reserved-mail`, unique AuthDomain, budget email hello@extraliferecords.com and
    `SendingEnabled=false`. Deployment does not activate rules or change DNS.
 3. Redeploy with CallbackUrl equal to the WebInbox output. The desktop callback
    `http://localhost:8765/callback` remains registered alongside it.
