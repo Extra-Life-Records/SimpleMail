@@ -108,7 +108,7 @@ class CloudAccounts:
         if row.get('draft'):
             row = {**row, **row['draft']}
         self.request(account, 'PATCH', self.mid(uid), {'seen': True})
-        return {**row, 'text': row.get('body', ''), 'html': None, 'message_ref': None,
+        return {**row, 'text': row.get('body', ''), 'html': row.get('html'), 'message_ref': None,
                 'attachments': [{**a, 'index': a['part']} for a in row.get('attachments', []) if 'part' in a]}
 
     def set_seen(self, account, folder, uid, seen, validity=None):

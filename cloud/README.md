@@ -79,7 +79,9 @@ New assignments have separate history namespaces, including for delayed retries.
 
 The inbox supports reading, replies, Sent, Drafts, Junk, recoverable Trash,
 attachments and paginated full text-body/header search. Binary attachments are
-not searched. Message display is plain text; no active HTML or remote images.
+not searched. The API preserves original HTML for SimpleMail’s sandboxed, sanitized reader.
+Remote images remain opt-in and scripts are blocked. Plain-text fallback retains
+safe link destinations, including action buttons in HTML-only invitations.
 The chronological index is eventually consistent, so refresh may be needed after writes.
 
 Limits: 30 MB raw incoming MIME, 500,000 displayed text characters, 3 MB total
@@ -91,8 +93,8 @@ Send claims are durable and uncertain outcomes never automatically retry.
 The UI persists the request reference across reloads and saves the draft first.
 SES acceptance, delivery, bounce and complaint are separate recorded states.
 
-SimpleMail's **Extra Life Records inbox** button opens the same interface with a Python
-provider adapter. Sign-in uses the system browser, authorization code and PKCE.
+SimpleMail lists the five employee accounts alongside IMAP accounts in its main
+sidebar and uses the shared reader and composer through a Python provider adapter. Sign-in uses the system browser, authorization code and PKCE.
 Windows DPAPI protects the refresh session. Clients receive no AWS keys. The web
 UI stores refresh sessions in sessionStorage and revokes them on sign-out.
 Existing IMAP accounts and agent permissions are unchanged.

@@ -55,9 +55,10 @@ class UnifiedInboxTests(unittest.TestCase):
 
     def test_read_and_attachment_stay_in_selected_mailbox(self):
         self.transport.cloud_request.side_effect = [
-            {'body':'fixture body', 'attachments':[{'part':2,'name':'a.txt','size':1}]}, {'ok':True}]
+            {'body':'fixture body', 'html':'<a href="https://example.com/invite">Accept invite</a>', 'attachments':[{'part':2,'name':'a.txt','size':1}]}, {'ok':True}]
         row = self.api.get_message('cloud:two', 'Inbox', 'abc')
         self.assertEqual(row['text'], 'fixture body')
+        self.assertIn('https://example.com/invite', row['html'])
         self.assertEqual(row['attachments'][0]['index'], 2)
         for call in self.transport.cloud_request.call_args_list:
             self.assertTrue(call.args[1].startswith('/mailboxes/two/messages/abc'))
