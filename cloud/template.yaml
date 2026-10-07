@@ -1,0 +1,364 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: Private Extra Life Records reserved mailboxes (pilot; routing enabled separately)
+Parameters:
+  Domain:
+    Type: String
+    Default: extraliferecords.com
+  ReceiveDomain:
+    Type: String
+    Default: inbox.playloudr.com
+  AuthDomain:
+    Type: String
+    Description: Unique Cognito hosted login prefix
+  BudgetEmail:
+    Type: String
+    Default: hello@extraliferecords.com
+  SendingEnabled:
+    Type: String
+    Default: 'false'
+    AllowedValues: ['true', 'false']
+  ApiReservedConcurrency:
+    Type: Number
+    Default: 0
+    MinValue: 0
+    Description: Zero uses the account pool; reserve capacity only when the regional quota permits it.
+  CreateSendingIdentity:
+    Type: String
+    Default: 'false'
+    AllowedValues: ['true', 'false']
+    Description: Enable only after confirming the domain identity does not already exist in this region.
+  CallbackUrl:
+    Type: String
+    Default: http://localhost:8765/callback
+    Description: Set to the WebInbox output after first deployment; desktop callback retained.
+Globals:
+  Function:
+    Runtime: python3.12
+    Timeout: 30
+    MemorySize: 256
+    Architectures: [arm64]
+    CodeUri: src/
+    Environment:
+      Variables:
+        TABLE: !Ref MailTable
+        BUCKET: !Ref MailBucket
+        DOMAIN: !Ref Domain
+        RECEIVE_DOMAIN: !Ref ReceiveDomain
+Conditions:
+  ReserveApiCapacity: !Not [!Equals [!Ref ApiReservedConcurrency, 0]]
+  WebCallbackConfigured: !Not [!Equals [!Ref CallbackUrl, 'http://localhost:8765/callback']]
+  NewSendingIdentity: !Equals [!Ref CreateSendingIdentity, 'true']
+Resources:
+  MailBucket:
+    Type: AWS::S3::Bucket
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault: {SSEAlgorithm: AES256}
+      VersioningConfiguration: {Status: Enabled}
+      LifecycleConfiguration:
+        Rules:
+          - Id: ExpireOldVersions
+            Status: Enabled
+            NoncurrentVersionExpiration: {NoncurrentDays: 35}
+            AbortIncompleteMultipartUpload: {DaysAfterInitiation: 1}
+  MailBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref MailBucket
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Deny
+            Principal: '*'
+            Action: s3:*
+            Resource: [!GetAtt MailBucket.Arn, !Sub '${MailBucket.Arn}/*']
+            Condition: {Bool: {'aws:SecureTransport': 'false'}}
+          - Effect: Allow
+            Principal: {Service: ses.amazonaws.com}
+            Action: s3:PutObject
+            Resource: !Sub '${MailBucket.Arn}/incoming/*'
+            Condition:
+              StringEquals: {'AWS:SourceAccount': !Ref 'AWS::AccountId'}
+              ArnLike: {'AWS:SourceArn': !Sub 'arn:aws:ses:${AWS::Region}:${AWS::AccountId}:receipt-rule-set/*'}
+  MailTable:
+    Type: AWS::DynamoDB::Table
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - {AttributeName: pk, AttributeType: S}
+        - {AttributeName: sk, AttributeType: S}
+        - {AttributeName: received, AttributeType: S}
+      KeySchema:
+        - {AttributeName: pk, KeyType: HASH}
+        - {AttributeName: sk, KeyType: RANGE}
+      PointInTimeRecoverySpecification: {PointInTimeRecoveryEnabled: true}
+      SSESpecification: {SSEEnabled: true}
+      GlobalSecondaryIndexes:
+        - IndexName: Chronological
+          KeySchema:
+            - {AttributeName: pk, KeyType: HASH}
+            - {AttributeName: received, KeyType: RANGE}
+          Projection: {ProjectionType: ALL}
+  Pool:
+    Type: AWS::Cognito::UserPool
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      AdminCreateUserConfig: {AllowAdminCreateUserOnly: true}
+      UsernameAttributes: [email]
+      AutoVerifiedAttributes: [email]
+      MfaConfiguration: 'ON'
+      EnabledMfas: [SOFTWARE_TOKEN_MFA]
+      Policies:
+        PasswordPolicy:
+          MinimumLength: 14
+          RequireLowercase: true
+          RequireUppercase: true
+          RequireNumbers: true
+          RequireSymbols: true
+          TemporaryPasswordValidityDays: 7
+      AccountRecoverySetting:
+        RecoveryMechanisms:
+          - {Name: verified_email, Priority: 1}
+  PoolDomain:
+    Type: AWS::Cognito::UserPoolDomain
+    Properties: {Domain: !Ref AuthDomain, UserPoolId: !Ref Pool}
+  Client:
+    Type: AWS::Cognito::UserPoolClient
+    Properties:
+      UserPoolId: !Ref Pool
+      GenerateSecret: false
+      AllowedOAuthFlowsUserPoolClient: true
+      AllowedOAuthFlows: [code]
+      AllowedOAuthScopes: [openid, email, aws.cognito.signin.user.admin]
+      SupportedIdentityProviders: [COGNITO]
+      CallbackURLs: !If [WebCallbackConfigured, [!Ref CallbackUrl, 'http://localhost:8765/callback'], ['http://localhost:8765/callback']]
+      LogoutURLs: !If [WebCallbackConfigured, [!Ref CallbackUrl, 'http://localhost:8765/callback'], ['http://localhost:8765/callback']]
+      AccessTokenValidity: 5
+      IdTokenValidity: 5
+      RefreshTokenValidity: 1
+      TokenValidityUnits: {AccessToken: minutes, IdToken: minutes, RefreshToken: days}
+      EnableTokenRevocation: true
+      PreventUserExistenceErrors: ENABLED
+  HttpApi:
+    Type: AWS::Serverless::HttpApi
+    Properties:
+      StageName: '$default'
+      DefaultRouteSettings: {ThrottlingBurstLimit: 20, ThrottlingRateLimit: 5}
+      Auth:
+        Authorizers:
+          Employee:
+            JwtConfiguration:
+              issuer: !Sub 'https://cognito-idp.${AWS::Region}.amazonaws.com/${Pool}'
+              audience: [!Ref Client]
+            IdentitySource: '$request.header.Authorization'
+            AuthorizationScopes: [openid]
+        DefaultAuthorizer: Employee
+  ApiFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      Handler: service.api
+      MemorySize: 512
+      ReservedConcurrentExecutions: !If [ReserveApiCapacity, !Ref ApiReservedConcurrency, !Ref 'AWS::NoValue']
+      Environment:
+        Variables: {SENDING_ENABLED: !Ref SendingEnabled, CONFIGURATION_SET: !Ref SendingConfiguration}
+      Policies:
+        - DynamoDBCrudPolicy: {TableName: !Ref MailTable}
+        - S3CrudPolicy: {BucketName: !Ref MailBucket}
+        - Statement:
+            - Effect: Allow
+              Action: ses:SendEmail
+              Resource:
+                - !Sub 'arn:aws:ses:${AWS::Region}:${AWS::AccountId}:identity/${Domain}'
+                - !Sub 'arn:aws:ses:${AWS::Region}:${AWS::AccountId}:configuration-set/${SendingConfiguration}'
+              Condition:
+                StringLike:
+                  ses:FromAddress:
+                    - !Sub 'one@${Domain}'
+                    - !Sub 'two@${Domain}'
+                    - !Sub 'three@${Domain}'
+                    - !Sub 'four@${Domain}'
+                    - !Sub 'five@${Domain}'
+      Events:
+        Root: {Type: HttpApi, Properties: {ApiId: !Ref HttpApi, Path: /mailboxes, Method: GET}}
+        Mail: {Type: HttpApi, Properties: {ApiId: !Ref HttpApi, Path: '/mailboxes/{proxy+}', Method: ANY}}
+  WebFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      Handler: web.serve
+      Environment:
+        Variables:
+          CLIENT_ID: !Ref Client
+          AUTH_URL: !Sub 'https://${AuthDomain}.auth.${AWS::Region}.amazoncognito.com'
+      Events:
+        Page: {Type: HttpApi, Properties: {ApiId: !Ref HttpApi, Path: '/ui/{proxy+}', Method: GET, Auth: {Authorizer: NONE}}}
+  ReceiveTopic:
+    Type: AWS::SNS::Topic
+  ReceiveTopicPolicy:
+    Type: AWS::SNS::TopicPolicy
+    Properties:
+      Topics: [!Ref ReceiveTopic]
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal: {Service: ses.amazonaws.com}
+            Action: sns:Publish
+            Resource: !Ref ReceiveTopic
+            Condition: {StringEquals: {'AWS:SourceAccount': !Ref 'AWS::AccountId'}}
+  ReceiveFailures:
+    Type: AWS::SQS::Queue
+    Properties: {MessageRetentionPeriod: 1209600, SqsManagedSseEnabled: true}
+  Receiver:
+    Type: AWS::Serverless::Function
+    Properties:
+      Handler: service.receive
+      Timeout: 60
+      MemorySize: 512
+      DeadLetterQueue: {Type: SQS, TargetArn: !GetAtt ReceiveFailures.Arn}
+      Policies:
+        - DynamoDBCrudPolicy: {TableName: !Ref MailTable}
+        - S3ReadPolicy: {BucketName: !Ref MailBucket}
+      Events:
+        Received: {Type: SNS, Properties: {Topic: !Ref ReceiveTopic}}
+  Rules:
+    Type: AWS::SES::ReceiptRuleSet
+  ReceiptRule:
+    Type: AWS::SES::ReceiptRule
+    DependsOn: [MailBucketPolicy, ReceiveTopicPolicy]
+    Properties:
+      RuleSetName: !Ref Rules
+      Rule:
+        Name: playloudr-reserved
+        Enabled: true
+        ScanEnabled: true
+        TlsPolicy: Require
+        Recipients:
+          - !Sub 'one@${ReceiveDomain}'
+          - !Sub 'two@${ReceiveDomain}'
+          - !Sub 'three@${ReceiveDomain}'
+          - !Sub 'four@${ReceiveDomain}'
+          - !Sub 'five@${ReceiveDomain}'
+        Actions:
+          - S3Action: {BucketName: !Ref MailBucket, ObjectKeyPrefix: incoming/, TopicArn: !Ref ReceiveTopic}
+  ReceiveIdentity:
+    Type: AWS::SES::EmailIdentity
+    Properties: {EmailIdentity: !Ref ReceiveDomain}
+  SendingConfiguration:
+    Type: AWS::SES::ConfigurationSet
+  SendingIdentity:
+    Type: AWS::SES::EmailIdentity
+    Condition: NewSendingIdentity
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      EmailIdentity: !Ref Domain
+      DkimAttributes: {SigningEnabled: true}
+      DkimSigningAttributes: {NextSigningKeyLength: RSA_2048_BIT}
+      MailFromAttributes:
+        MailFromDomain: !Sub 'return-mail.${Domain}'
+        BehaviorOnMxFailure: REJECT_MESSAGE
+  DeliveryTopic:
+    Type: AWS::SNS::Topic
+  DeliveryTopicPolicy:
+    Type: AWS::SNS::TopicPolicy
+    Properties:
+      Topics: [!Ref DeliveryTopic]
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal: {Service: ses.amazonaws.com}
+            Action: sns:Publish
+            Resource: !Ref DeliveryTopic
+            Condition: {StringEquals: {'AWS:SourceAccount': !Ref 'AWS::AccountId'}}
+  SendingEvents:
+    Type: AWS::SES::ConfigurationSetEventDestination
+    DependsOn: DeliveryTopicPolicy
+    Properties:
+      ConfigurationSetName: !Ref SendingConfiguration
+      EventDestination:
+        Enabled: true
+        MatchingEventTypes: [send, reject, bounce, complaint, delivery, deliveryDelay]
+        SnsDestination: {TopicARN: !Ref DeliveryTopic}
+  DeliveryFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      Handler: service.delivery
+      DeadLetterQueue: {Type: SQS, TargetArn: !GetAtt ReceiveFailures.Arn}
+      Policies:
+        - DynamoDBCrudPolicy: {TableName: !Ref MailTable}
+      Events:
+        Delivery: {Type: SNS, Properties: {Topic: !Ref DeliveryTopic}}
+  DeliveryLogs:
+    Type: AWS::Logs::LogGroup
+    Properties: {LogGroupName: !Sub '/aws/lambda/${DeliveryFunction}', RetentionInDays: 14}
+  ApiLogs:
+    Type: AWS::Logs::LogGroup
+    Properties: {LogGroupName: !Sub '/aws/lambda/${ApiFunction}', RetentionInDays: 14}
+  ReceiverLogs:
+    Type: AWS::Logs::LogGroup
+    Properties: {LogGroupName: !Sub '/aws/lambda/${Receiver}', RetentionInDays: 14}
+  WebLogs:
+    Type: AWS::Logs::LogGroup
+    Properties: {LogGroupName: !Sub '/aws/lambda/${WebFunction}', RetentionInDays: 14}
+  FailureAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      Namespace: AWS/SQS
+      MetricName: ApproximateNumberOfMessagesVisible
+      Dimensions: [{Name: QueueName, Value: !GetAtt ReceiveFailures.QueueName}]
+      Statistic: Maximum
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 0
+      ComparisonOperator: GreaterThanThreshold
+      TreatMissingData: notBreaching
+  Budget:
+    Type: AWS::Budgets::Budget
+    Properties:
+      Budget:
+        BudgetName: playloudr-mail-account-alerts
+        BudgetType: COST
+        TimeUnit: MONTHLY
+        BudgetLimit: {Amount: 20, Unit: USD}
+      NotificationsWithSubscribers:
+        - Notification: {NotificationType: ACTUAL, ComparisonOperator: GREATER_THAN, Threshold: 5, ThresholdType: ABSOLUTE_VALUE}
+          Subscribers: [{SubscriptionType: EMAIL, Address: !Ref BudgetEmail}]
+        - Notification: {NotificationType: ACTUAL, ComparisonOperator: GREATER_THAN, Threshold: 10, ThresholdType: ABSOLUTE_VALUE}
+          Subscribers: [{SubscriptionType: EMAIL, Address: !Ref BudgetEmail}]
+        - Notification: {NotificationType: ACTUAL, ComparisonOperator: GREATER_THAN, Threshold: 20, ThresholdType: ABSOLUTE_VALUE}
+          Subscribers: [{SubscriptionType: EMAIL, Address: !Ref BudgetEmail}]
+Outputs:
+  ApiUrl: {Value: !Sub 'https://${HttpApi}.execute-api.${AWS::Region}.amazonaws.com'}
+  WebInbox: {Value: !Sub 'https://${HttpApi}.execute-api.${AWS::Region}.amazonaws.com/ui/index.html'}
+  Table: {Value: !Ref MailTable}
+  Bucket: {Value: !Ref MailBucket}
+  UserPool: {Value: !Ref Pool}
+  ClientId: {Value: !Ref Client}
+  AuthUrl: {Value: !Sub 'https://${AuthDomain}.auth.${AWS::Region}.amazoncognito.com'}
+  RuleSet: {Value: !Ref Rules}
+  ReceiveIdentity: {Value: !Ref ReceiveDomain}
+  ReceivingDkim1: {Value: !Join [' -> ', [!GetAtt ReceiveIdentity.DkimDNSTokenName1, !GetAtt ReceiveIdentity.DkimDNSTokenValue1]]}
+  ReceivingDkim2: {Value: !Join [' -> ', [!GetAtt ReceiveIdentity.DkimDNSTokenName2, !GetAtt ReceiveIdentity.DkimDNSTokenValue2]]}
+  ReceivingDkim3: {Value: !Join [' -> ', [!GetAtt ReceiveIdentity.DkimDNSTokenName3, !GetAtt ReceiveIdentity.DkimDNSTokenValue3]]}
+  SendingDkim1:
+    Condition: NewSendingIdentity
+    Value: !Join [' -> ', [!GetAtt SendingIdentity.DkimDNSTokenName1, !GetAtt SendingIdentity.DkimDNSTokenValue1]]
+  SendingDkim2:
+    Condition: NewSendingIdentity
+    Value: !Join [' -> ', [!GetAtt SendingIdentity.DkimDNSTokenName2, !GetAtt SendingIdentity.DkimDNSTokenValue2]]
+  SendingDkim3:
+    Condition: NewSendingIdentity
+    Value: !Join [' -> ', [!GetAtt SendingIdentity.DkimDNSTokenName3, !GetAtt SendingIdentity.DkimDNSTokenValue3]]

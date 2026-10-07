@@ -1,0 +1,12 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Extra Life Records Mail · SimpleMail</title><link rel="stylesheet" href="style.css"></head>
+<body><header><strong>Extra Life Records Mail</strong><span>by SimpleMail</span><button id="login">Sign in</button><button id="logout" hidden>Sign out</button></header>
+<div id="status" role="status">Sign in to open your mailbox.</div><button id="check-send" hidden>Check previous send</button>
+<section id="setup" hidden><h2>Connect your AWS inbox</h2><p>Use the connection details from your mailbox administrator.</p>
+<label>API URL<input id="api-url" type="url"></label><label>Login URL<input id="auth-url" type="url"></label><label>Client ID<input id="client-id"></label><button id="connect">Save connection</button></section>
+<main id="mail" hidden><aside><label>Mailbox<select id="mailbox"></select></label><p id="assignment"></p><nav id="folders"></nav><button id="compose">New message</button></aside>
+<section class="listing"><label>Search all messages<input id="search" type="search" placeholder="Subject, sender or message text"></label><button id="refresh">Refresh</button><div id="messages"></div><button id="more" hidden>Load more</button></section>
+<article><div id="reading"><h1>Your inbox</h1><p>Select a message to read it.</p></div>
+<form id="editor" hidden><h2>New message</h2><label>To<input id="to" required></label><label>Cc<input id="cc"></label><label>Bcc<input id="bcc"></label><label>Subject<input id="subject"></label><label>Message<textarea id="body" rows="12"></textarea></label><label>Attachments (3 MB total)<input id="files" type="file" multiple></label><p id="attached"></p><div class="actions"><button type="submit">Send</button><button type="button" id="save">Save draft</button><button type="button" id="cancel">Close</button></div></form></article></main>
+<script src="app.js"></script></body></html>

@@ -21,6 +21,7 @@ jobs:
           - arch: arm64
             runner: windows-11-arm
     runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v6
@@ -47,7 +48,7 @@ jobs:
           python make_icon.py
       - name: Build desktop and console agent
         run: |
-          python -m PyInstaller --noconfirm --clean --onefile --windowed --name SimpleMail --icon assets/icon.ico --add-data "web;web" --add-data "assets;assets" --add-data "runtimeconfig.json;." --hidden-import webview.platforms.winforms mailapp.py
+          python -m PyInstaller --noconfirm --clean --onefile --windowed --name SimpleMail --icon assets/icon.ico --add-data "web;web" --add-data "cloud/src/static;cloud/src/static" --add-data "assets;assets" --add-data "runtimeconfig.json;." --hidden-import webview.platforms.winforms mailapp.py
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           python -m PyInstaller --noconfirm --clean --onefile --console --name SimpleMailAgent --add-data "runtimeconfig.json;." --hidden-import webview.platforms.winforms agent_mcp.py
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
@@ -68,6 +69,7 @@ jobs:
     if: startsWith(github.ref, 'refs/tags/v')
     needs: package
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     permissions:
       contents: write
     steps:

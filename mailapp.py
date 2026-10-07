@@ -54,7 +54,7 @@ else:
     _WEBVIEW_IMPORT_ERROR = None
 
 APP_NAME = "SimpleMail"
-APP_VERSION = "1.8.2"
+APP_VERSION = "1.9.0"
 APP_REPO = "Extra-Life-Records/SimpleMail"  # owner/repo for auto-updates
 CONFIG_DIR = Path(os.environ.get("APPDATA", str(Path.home()))) / APP_NAME
 CONFIG_FILE = CONFIG_DIR / "config.json"
@@ -1092,6 +1092,11 @@ _API_WINDOW = None  # set in main(); kept module-level so pywebview's
 
 
 class Api:
+    def open_aws_inbox(self):
+        """Separate authenticated provider; existing IMAP accounts are unchanged."""
+        from cloud_mail import open_inbox
+        return open_inbox(CONFIG_DIR)
+
     def __init__(self, cfg):
         self.cfg = cfg
         self._log_path = _BASE_DIR / "api_debug.log"
