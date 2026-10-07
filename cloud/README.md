@@ -2,8 +2,9 @@
 
 **Receiving pilot deployed; not ready for employee use.** This branch implements
 the AWS backend, web inbox and SimpleMail provider window. Five reserved inboxes
-received real Gmail tests with attachments. Public forwarding, owner login acceptance,
-outbound mail and installed SimpleMail acceptance remain pending. No employee or
+received real Gmail tests with attachments. Public forwarding and owner web login
+work. MFA enrollment confirmation, outbound mail and installed SimpleMail acceptance
+remain pending. No employee or
 Claude accounts have been created.
 
 ## Deployment evidence, 7 October 2026
@@ -21,9 +22,17 @@ Claude accounts have been created.
 - Five subdomain Gmail deliveries reached separate mailbox generations. Each had
   a 61-byte `pilot-check.txt` attachment and passing spam, virus, SPF, DKIM and DMARC
   verdicts. Evidence is saved under ignored `.deployment/`.
-- Five Cloudflare destinations registered, pending verification. Public forwarders
-  are not enabled. Owner invitation sent to hello@extraliferecords.com; password
-  and TOTP setup must be completed by the owner.
+- Five Cloudflare destinations verified through the owner's web inbox. All five
+  exact public forwarders are active, with hello/rewards and catch-all preserved.
+  Gmail public tests reached all five inboxes. Four/five initially returned explicit
+  550 address-not-found responses immediately after creation; later labelled retests
+  delivered successfully. Existing hello delivery still needs mailbox confirmation.
+- Owner password setup and web inbox reading verified. Cognito requires software
+  MFA at pool level, but admin_get_user did not yet report an enrolled MFA method;
+  confirm enrollment with the owner before treating authentication acceptance complete.
+- Installed SimpleMailAgent.exe lists Extra Life Records and Playloudr accounts,
+  but both reject MCP startup as paused/unassigned. Owner must enable the scoped
+  reading job in Agent setup; do not bypass this permission gate.
 - Initial deployment rolled back because reserving Lambda concurrency exceeded the
   account's small regional quota. The corrected template uses shared capacity by
   default. The old empty table/user pool and bucket with AWS's setup notification
