@@ -3,35 +3,51 @@ const {chromium}=require(process.env.SIMPLEMAIL_PLAYWRIGHT_MODULE || 'playwright
 (async()=>{
  const browser=await chromium.launch({headless:true,...(process.env.SIMPLEMAIL_CHROMIUM?{executablePath:process.env.SIMPLEMAIL_CHROMIUM}:{})});
  try {
- const page=await browser.newPage();const requests=[];const errors=[];
+ const page=await browser.newPage();const requests=[];const errors=[];const imageCalls=[];
+ const pixel='data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+a7xkAAAAASUVORK5CYII=';
+ let failImages=false;
+ await page.exposeFunction('fixtureImageLoader',async(...args)=>{imageCalls.push(args);return failImages?{images:{},failed:1}:{images:{'https://tracking.example.invalid/pixel':pixel},failed:0};});
  page.on('pageerror',e=>errors.push(e.message));
  await page.route('https://tracking.example.invalid/**',r=>{requests.push(r.request().url());return r.fulfill({status:200,contentType:'image/png',body:Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+a7xkAAAAASUVORK5CYII=','base64')});});
  await page.addInitScript(()=>{
  const html='<img src="https://tracking.example.invalid/pixel" srcset="https://tracking.example.invalid/srcset 2x"><div style="background-image:url(https://tracking.example.invalid/css);color:red">Text</div><svg><image href="https://tracking.example.invalid/svg"/></svg><iframe src="https://tracking.example.invalid/frame"></iframe><video poster="https://tracking.example.invalid/poster"><source src="https://tracking.example.invalid/media"></video><link rel="stylesheet" href="https://tracking.example.invalid/style"><script>parent.attack=true</script><img src="javascript:attack()"><a href="javascript:attack()">Bad</a><a href="https://example.invalid">Safe</a>';
- window.pywebview={api:{get_config:async()=>({accounts:[{id:'fixture',label:'Fixture',email:'qa@example.invalid',identity:'qa@example.invalid',has_password:true,has_smtp_password:true}],active_account:'fixture'}),get_folders:async()=>({folders:[{key:'inbox',name:'Inbox',server:'INBOX',unread:0}]}),list_messages:async()=>({envelopes:[],inbox_unread:0}),set_active_account:async()=>{},check_update:async()=>({available:false}),get_message:async(a,f,uid)=>({subject:'Fixture',sender:'qa@example.invalid',text:'Text',html:uid==='plain'?'<p>No remote images</p>':html,attachments:[]})}};
+ window.pywebview={api:{get_config:async()=>({accounts:[{id:'fixture',label:'Fixture',email:'qa@example.invalid',identity:'qa@example.invalid',has_password:true,has_smtp_password:true}],active_account:'fixture'}),get_folders:async()=>({folders:[{key:'inbox',name:'Inbox',server:'INBOX',unread:0}]}),list_messages:async()=>({envelopes:[],inbox_unread:0}),set_active_account:async()=>{},check_update:async()=>({available:false}),load_message_images:(...args)=>window.fixtureImageLoader(...args),get_message:async(a,f,uid)=>({subject:'Fixture',sender:'qa@example.invalid',text:'Text',html:uid==='plain'?'<p>No remote images</p>':html,attachments:[]})}};
  });
  await page.goto(process.env.SIMPLEMAIL_TEST_URL || require('node:url').pathToFileURL(require('node:path').join(__dirname,'../web/index.html')).href);
  await page.waitForFunction(()=>state.folders.length>0 && api);
  await page.evaluate(()=>openMessage('one'));
  await page.locator('#read-body iframe').waitFor();await page.waitForTimeout(300);
  assert.deepEqual(requests,[],'Default reading must make no remote requests, including during parsing');
+ assert.deepEqual(imageCalls,[],'Native downloads also need explicit consent');
  await page.getByRole('button',{name:'Load images',exact:true}).click();
- await page.waitForFunction(()=>document.querySelector('#read-body iframe').srcdoc.includes('img-src data: https: http:'));
- await page.waitForTimeout(300);
- assert.deepEqual(requests,['https://tracking.example.invalid/pixel']);
- assert.equal(await page.evaluate(()=>Boolean(window.attack)),false);
+ await page.getByRole('button',{name:'Load images',exact:true}).waitFor({state:'detached'});
  const frame=page.frameLocator('#read-body iframe');
+ await frame.locator('img').first().evaluate(img=>img.complete&&img.naturalWidth>0?null:new Promise((resolve,reject)=>{img.onload=resolve;img.onerror=()=>reject(Error('Image did not decode'));}));
+ assert.equal(await frame.locator('img').first().evaluate(img=>img.naturalWidth),1,'Load images must display pixels, not just remove the button');
+ assert.deepEqual(imageCalls,[['fixture','INBOX','one',null]]);
+ assert.deepEqual(requests,[],'The sandbox must keep direct network image loads blocked');
+ assert.equal(await page.evaluate(()=>Boolean(window.attack)),false);
  assert.equal(await frame.locator('a').first().getAttribute('href'),null);
  assert.equal(await frame.locator('a').last().getAttribute('rel'),'noopener noreferrer');
  assert.equal(await frame.locator('img').first().getAttribute('referrerpolicy'),'no-referrer');
  await page.evaluate(()=>openMessage('two'));await page.waitForTimeout(300);
- assert.equal(requests.length,1,'Permission must reset for the next message');
+ assert.equal(imageCalls.length,1,'Permission must reset for the next message');
  await page.getByRole('button',{name:'Load images',exact:true}).waitFor();
  await page.evaluate(()=>openMessage('plain'));
  assert.equal(await page.getByRole('button',{name:'Load images',exact:true}).count(),0);
  // Detached controls must never grant permission after changing mailbox/view.
- await page.evaluate(async()=>{await openMessage('three');window.oldImages=document.querySelector('#read-body button');await openMessage('plain');oldImages.onclick();});
- assert.equal(requests.length,1);
+ await page.evaluate(async()=>{await openMessage('three');window.oldImages=document.querySelector('#read-body button');await openMessage('plain');await oldImages.onclick();});
+ assert.equal(imageCalls.length,1);
+ failImages=true;
+ await page.evaluate(()=>openMessage('retry'));
+ await page.getByRole('button',{name:'Load images',exact:true}).click();
+ await page.getByRole('button',{name:'Retry images',exact:true}).waitFor();
+ assert.equal(await frame.locator('img').first().getAttribute('src'),null);
+ failImages=false;
+ await page.getByRole('button',{name:'Retry images',exact:true}).click();
+ await page.getByRole('button',{name:'Retry images',exact:true}).waitFor({state:'detached'});
+ await frame.locator('img').first().evaluate(img=>img.complete&&img.naturalWidth>0?null:new Promise((resolve,reject)=>{img.onload=resolve;img.onerror=()=>reject(Error('Image retry did not decode'));}));
+ assert.equal(await frame.locator('img').first().evaluate(img=>img.naturalWidth),1);
  await page.evaluate(()=>{api.save_config=async data=>{window.savedAccount=structuredClone(data.accounts[0]);return {ok:true};};});
  await page.evaluate(()=>openSettings());
  assert.equal(await page.locator('#set-password').inputValue(),'');
@@ -54,6 +70,6 @@ const {chromium}=require(process.env.SIMPLEMAIL_PLAYWRIGHT_MODULE || 'playwright
  await page.waitForFunction(()=>!document.querySelector('#settings-backdrop').classList.contains('show'));
  assert.equal(await page.evaluate(()=>savedAccount.clear_smtp_password),true);
  assert.deepEqual(errors,[]);
- console.log(JSON.stringify({defaultRequests:0,explicitImagesOnly:true,nextMessageBlocked:true,staleConsentBlocked:true,noExtraButton:true,unsafeLinksBlocked:true,credentialSettings:true,passed:true}));
+ console.log(JSON.stringify({defaultRequests:0,explicitImagesOnly:true,imagesDecoded:true,failedImagesRetry:true,nextMessageBlocked:true,staleConsentBlocked:true,noExtraButton:true,unsafeLinksBlocked:true,credentialSettings:true,passed:true}));
  } finally {await browser.close();}
 })().catch(e=>{console.error(e);process.exitCode=1});
