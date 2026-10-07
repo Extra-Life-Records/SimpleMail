@@ -56,4 +56,3 @@ const assert=require('node:assert/strict');
   console.log('Unified sidebar, five inbox readers, reply identity, drafts, search and return to IMAP passed.');
  } finally {await browser.close();}
 })().catch(e=>{console.error(e);process.exitCode=1});
-
