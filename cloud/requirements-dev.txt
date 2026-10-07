@@ -1,0 +1,3 @@
+boto3==1.43.108
+moto[s3,dynamodb,ses]==5.2.3
+cfn-lint==1.57.2

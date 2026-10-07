@@ -17,6 +17,10 @@ function activeAccount() {
 
 const $ = (id) => document.getElementById(id);
 
+document.getElementById('aws-inbox-btn')?.addEventListener('click', async () => {
+  try { await api.open_aws_inbox(); } catch (error) { alert(String(error)); }
+});
+
 const MAIL_REFRESH_MS = 30000;
 let mailboxView = { requests: 0, loads: 0, actions: 0 };
 let messageReadRequest = 0;

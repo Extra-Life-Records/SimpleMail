@@ -12,6 +12,7 @@ permissions:
 jobs:
   regression:
     runs-on: windows-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -37,3 +38,16 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           node tests/owner_search_browser.cjs
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          node tests/cloud_mail_browser.cjs
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+  aws-mail:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: pip install -r cloud/requirements-dev.txt
+      - run: cfn-lint cloud/template.yaml
+      - run: python -m unittest discover -s cloud/tests -v

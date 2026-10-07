@@ -1092,6 +1092,11 @@ _API_WINDOW = None  # set in main(); kept module-level so pywebview's
 
 
 class Api:
+    def open_aws_inbox(self):
+        """Separate authenticated provider; existing IMAP accounts are unchanged."""
+        from cloud_mail import open_inbox
+        return open_inbox(CONFIG_DIR)
+
     def __init__(self, cfg):
         self.cfg = cfg
         self._log_path = _BASE_DIR / "api_debug.log"
