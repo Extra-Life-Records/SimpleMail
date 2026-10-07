@@ -2,7 +2,16 @@ const {chromium}=require(process.env.SIMPLEMAIL_PLAYWRIGHT_MODULE || 'playwright
 const assert=require('node:assert/strict');
 const {pathToFileURL}=require('node:url');
 const path=require('node:path');
+const http=require('node:http');
+const fs=require('node:fs');
 (async()=>{
+ const server=http.createServer((req,res)=>{
+  const name=req.url.split('?')[0].slice(1)||'index.html';
+  if(!['index.html','app.js','style.css'].includes(name)){res.writeHead(404);res.end();return;}
+  res.setHeader('Content-Type',name.endsWith('.js')?'text/javascript':name.endsWith('.css')?'text/css':'text/html');
+  res.end(fs.readFileSync(path.resolve('cloud/src/static',name)));
+ });
+ await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));
  const browser=await chromium.launch({headless:true,...(process.env.SIMPLEMAIL_CHROMIUM?{executablePath:process.env.SIMPLEMAIL_CHROMIUM}:{})});
  try{
   const page=await browser.newPage({viewport:{width:1280,height:800}});const errors=[];page.on('pageerror',e=>errors.push(e.message));
@@ -20,7 +29,7 @@ const path=require('node:path');
    }}};
    window.addEventListener('DOMContentLoaded',()=>window.dispatchEvent(new Event('pywebviewready')));
   });
-  await page.goto(pathToFileURL(path.resolve('cloud/src/static/index.html')).href);
+  await page.goto('http://127.0.0.1:'+server.address().port+'/index.html');
   await page.getByText('A real message',{exact:true}).click();
   await page.getByText('<img src="https://tracker.invalid/pixel"> untrusted',{exact:true}).waitFor();
   assert.equal(await page.locator('#reading img').count(),0);
@@ -36,5 +45,5 @@ const path=require('node:path');
   assert.equal(await page.evaluate(()=>calls.filter(c=>c.path.endsWith('/send')).length),0);
   await page.getByRole('button',{name:'New message'}).click();await page.locator('#editor').waitFor();
   assert.deepEqual(errors,[]);console.log('Cloud inbox: safe rendering, reply, draft-before-send, uncertain-send reload recovery passed');
- }finally{await browser.close();}
+ }finally{await browser.close();server.close();}
 })().catch(e=>{console.error(e);process.exitCode=1;});

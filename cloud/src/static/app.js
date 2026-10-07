@@ -124,4 +124,8 @@ $('refresh').onclick=guard(()=>list());$('more').onclick=guard(()=>list(true));$
 $('editor').onsubmit=guard(send);
 $('save').onclick=guard(async()=>{if(pendingSend)throw Error('Resolve the send outcome first.');const result=await request('POST',base()+'/drafts',{...payload(),attachments,id:draftId,revision:draftRevision});draftId=result.id;draftRevision=result.revision;status('Draft saved.');});
 $('files').onchange=guard(async()=>{const files=[...$('files').files];if(files.reduce((n,f)=>n+f.size,0)>3*1024*1024)throw Error('Attachments exceed 3 MB total.');attachments=[];for(const f of files){const bytes=new Uint8Array(await f.arrayBuffer());let binary='';for(let i=0;i<bytes.length;i+=8192)binary+=String.fromCharCode(...bytes.subarray(i,i+8192));attachments.push({name:f.name,data:btoa(binary)});}$('attached').textContent=attachments.map(a=>a.name).join(', ');});
-if(location.protocol==='file:')window.addEventListener('pywebviewready',guard(boot));else guard(boot)();
+if(location.protocol==='file:'||['localhost','127.0.0.1','::1'].includes(location.hostname)){
+  let started=false;
+  const start=()=>{if(started||!window.pywebview?.api)return;started=true;guard(boot)();};
+  window.addEventListener('pywebviewready',start);start();
+}else guard(boot)();
