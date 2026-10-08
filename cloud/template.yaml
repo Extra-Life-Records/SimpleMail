@@ -147,7 +147,8 @@ Resources:
       LogoutURLs: !If [WebCallbackConfigured, [!Ref CallbackUrl, 'http://localhost:8765/callback'], ['http://localhost:8765/callback']]
       AccessTokenValidity: 5
       IdTokenValidity: 5
-      RefreshTokenValidity: 1
+      # Keep protected desktop sessions usable across ordinary daily use.
+      RefreshTokenValidity: 365
       TokenValidityUnits: {AccessToken: minutes, IdToken: minutes, RefreshToken: days}
       EnableTokenRevocation: true
       PreventUserExistenceErrors: ENABLED
