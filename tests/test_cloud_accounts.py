@@ -6,6 +6,7 @@ from unittest.mock import Mock, patch
 
 import mailapp
 from cloud_accounts import CloudAccounts
+from cloud_mail import CloudSignInRequired, CloudServiceError
 
 
 class UnifiedInboxTests(unittest.TestCase):
@@ -84,7 +85,20 @@ class UnifiedInboxTests(unittest.TestCase):
         self.transport.cloud_request.side_effect = ValueError('expired session')
         cfg = self.api.get_config()
         self.assertEqual([a['id'] for a in cfg['accounts']], ['hello'])
-        self.assertIn('reconnecting', cfg['cloud_error'])
+        self.assertIn('unavailable', cfg['cloud_error'])
+
+    def test_discovery_reports_safe_expiry_and_service_errors_separately(self):
+        for error in (CloudSignInRequired('Reconnect employee mailboxes in Settings.'),
+                      CloudServiceError('Mailbox service is temporarily unavailable. Please try again.')):
+            with self.subTest(error=type(error).__name__):
+                self.transport.cloud_request.side_effect = error
+                cfg = self.api.get_config()
+                self.assertEqual(cfg['cloud_error'], str(error))
+                self.assertEqual([a['id'] for a in cfg['accounts']], ['hello'])
+
+    def test_unexpected_discovery_error_does_not_disclose_private_details(self):
+        self.transport.cloud_request.side_effect = RuntimeError('private provider detail')
+        self.assertNotIn('private', self.api.get_config()['cloud_error'])
 
     def test_reply_all_excludes_selected_identity(self):
         self.transport.cloud_request.return_value = {

@@ -30,6 +30,8 @@ from html.parser import HTMLParser
 from mail_credentials import unlock_account, write_config
 from window_state import load_placement, remember_window
 from cloud_accounts import CloudAccounts, route_cloud
+from cloud_mail import (CloudSignInRequired, CloudAccessDenied, CloudConfigurationError,
+                        CloudServiceError, CloudRequestError)
 
 # ---------------------------------------------------------------------------
 # pythonnet / pywebview environment (must be set BEFORE importing webview)
@@ -55,7 +57,7 @@ else:
     _WEBVIEW_IMPORT_ERROR = None
 
 APP_NAME = "SimpleMail"
-APP_VERSION = "1.9.3"
+APP_VERSION = "1.9.4"
 APP_REPO = "Extra-Life-Records/SimpleMail"  # owner/repo for auto-updates
 CONFIG_DIR = Path(os.environ.get("APPDATA", str(Path.home()))) / APP_NAME
 CONFIG_FILE = CONFIG_DIR / "config.json"
@@ -1167,8 +1169,11 @@ class Api:
         if cloud_configured:
             try:
                 accounts.extend(self._cloud_accounts().discover())
+            except (CloudSignInRequired, CloudAccessDenied, CloudConfigurationError,
+                    CloudServiceError, CloudRequestError) as exc:
+                cloud_error = str(exc)
             except Exception:
-                cloud_error = 'Employee mailboxes need reconnecting in Settings.'
+                cloud_error = 'Employee mailboxes are unavailable. Please try again.'
         return {
             "cloud_configured": cloud_configured,
             "cloud_error": cloud_error,

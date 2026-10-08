@@ -89,6 +89,9 @@
   }
   .acct-label { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   #accounts + hr { border: none; border-top: 1px solid var(--pico-muted-border-color); margin: 0 8px 8px; }
+  #cloud-status { padding: 10px; margin-bottom: 8px; font-size: 0.8rem; background: #fff4df; border-radius: 8px; }
+  #cloud-status[hidden] { display: none; }
+  #cloud-status button { margin: 8px 0 0; padding: 4px 8px; font-size: 0.8rem; }
 
   /* ---- Compose From strip (identity is locked; display only) ---- */
   .from-strip {
@@ -439,6 +442,10 @@
     <button id="compose-btn" class="contrast">+  New message</button>
 
     <div id="accounts"></div>
+    <div id="cloud-status" role="status" hidden>
+      <span id="cloud-status-message"></span>
+      <button type="button" id="cloud-settings" class="outline">Connection settings</button>
+    </div>
     <hr>
     <nav aria-label="Main navigation">
       <button class="folder" id="inbox-btn" data-key="inbox">Inbox</button>
