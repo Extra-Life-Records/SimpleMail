@@ -4,7 +4,7 @@ SimpleMail saves its Cognito refresh session protected by Windows DPAPI and
 automatically renews its five-minute access token. The original pilot configured
 that saved session to expire after one day, forcing an unnecessary daily login.
 
-The client now allows a saved sign-in for up to one year, unless revoked.
+The client now allows a saved sign-in for up to ten years, unless revoked.
 Cognito uses an absolute expiry: refreshing or rotating tokens does not extend
 that original lifetime. Sign-out revokes the saved refresh session.
 
