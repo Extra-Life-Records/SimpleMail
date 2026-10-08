@@ -116,6 +116,11 @@ function toast(msg, isError = false) {
   t._h = setTimeout(() => (t.style.display = "none"), 3200);
 }
 
+function showCloudStatus(message) {
+  $("cloud-status-message").textContent = message || "";
+  $("cloud-status").hidden = !message;
+}
+
 function filingToast(accountId, result, message) {
   toast(message);
   if (!result.action_id) return;
@@ -295,6 +300,7 @@ async function loadMessages({ quiet = false } = {}) {
     const accountId = state.activeAccountId;
     let res;
     let localDrafts = [];
+    let cloudError = null;
     if (folder.key === "drafts" && api.list_compose_drafts) {
       const results = await Promise.allSettled([
         folder.server ? api.list_messages(accountId, folder.server) : Promise.resolve({envelopes: [], unread: 0}),
@@ -304,9 +310,11 @@ async function loadMessages({ quiet = false } = {}) {
       localDrafts = results[1].value;
       if (typeof composeRecoveryDrafts === "function") localDrafts = composeRecoveryDrafts(accountId, localDrafts);
       if (results[0].status === "rejected" && !localDrafts.length) throw results[0].reason;
+      if (results[0].status === "rejected") cloudError = String(results[0].reason);
       res = results[0].status === "fulfilled" ? results[0].value : {envelopes: [], unread: 0};
     } else res = await api.list_messages(accountId, folder.server);
     if (view !== mailboxView || request !== view.requests) return;
+    if (activeAccount()?.provider === "cloud") showCloudStatus(cloudError);
     if (folder.validity && res.validity && folder.validity !== res.validity) {
       state.selectedUid = null;
       messageReadRequest++;
@@ -330,9 +338,11 @@ async function loadMessages({ quiet = false } = {}) {
     if (inbox && res.inbox_unread != null) inbox.unread = res.inbox_unread;
     updateUnreadCount();
   } catch (e) {
-    if (view !== mailboxView || request !== view.requests || quiet) return;
+    if (view !== mailboxView || request !== view.requests) return;
+    if (activeAccount()?.provider === "cloud") showCloudStatus(String(e));
+    if (quiet) return;
     if (!state.messages.length) {
-      $("msg-list").innerHTML = '<div class="empty">Failed to load. Check settings.</div>';
+      $("msg-list").innerHTML = '<div class="empty">' + escapeHtml(String(e)) + '</div>';
     }
     toast(String(e), true);
   } finally {
@@ -812,6 +822,7 @@ async function testConnection() {
 
 async function reloadAccounts() {
   const data = await api.get_config();
+  showCloudStatus(data.cloud_error);
   state.accounts = data.accounts || [];
   applyScale(data.ui_scale || "default");
   if (!state.accounts.length) {
@@ -844,6 +855,7 @@ async function init() {
   $("draft-btn").addEventListener("click", saveDraft);
   $("cancel-btn").addEventListener("click", discardCompose);
   $("settings-btn").addEventListener("click", openSettings);
+  $("cloud-settings").addEventListener("click", openSettings);
   $("cloud-reconnect").addEventListener("click", async () => {
     $("cloud-reconnect").disabled = true;
     toast("Complete sign-in in your browser, then return here.");
@@ -897,6 +909,7 @@ async function init() {
   try {
     const data = await api.get_config();
     checkForUpdates(true);  // silent check on startup - even when logged out
+    showCloudStatus(data.cloud_error);
     if (!data.accounts || !data.accounts.length) {
       toast("Add your first mail account to get started");
       openSettings();

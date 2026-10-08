@@ -11,11 +11,31 @@ import time
 import webbrowser
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
-from urllib.error import HTTPError
+from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode, urlsplit, parse_qs
 from urllib.request import Request, build_opener, HTTPRedirectHandler
 
 from mail_credentials import protect
+
+
+class CloudSignInRequired(ValueError):
+    pass
+
+
+class CloudAccessDenied(ValueError):
+    pass
+
+
+class CloudConfigurationError(ValueError):
+    pass
+
+
+class CloudServiceError(ValueError):
+    pass
+
+
+class CloudRequestError(ValueError):
+    pass
 
 
 class NoRedirect(HTTPRedirectHandler):
@@ -63,19 +83,48 @@ class CloudMail:
         return {'ok': True}
 
     @staticmethod
-    def _fetch(url, method='GET', data=None, headers=None):
+    def _fetch(url, method='GET', data=None, headers=None, *, oauth=False):
         req = Request(url, data=data, method=method, headers=headers or {})
         try:
             with build_opener(NoRedirect()).open(req, timeout=45) as response:
                 return json.loads(response.read(5000000))
         except HTTPError as exc:
-            if exc.code in (401, 403): raise ValueError('Sign in again or ask your administrator to check mailbox access') from None
-            raise ValueError('Mailbox request failed. If sending, check Sent before retrying.') from None
+            # Cognito reports an expired/revoked refresh grant as HTTP 400.
+            # Inspect only the bounded OAuth error code, never its description
+            # or an arbitrary mailbox API error body.
+            code = None
+            try:
+                if oauth:
+                    raw = exc.read(8193)
+                    if len(raw) <= 8192:
+                        error = json.loads(raw)
+                        code = error.get('error') if isinstance(error, dict) else None
+            except (OSError, ValueError):
+                pass
+            finally:
+                exc.close()
+            if oauth:
+                if exc.code == 429 or exc.code >= 500 or code in ('server_error', 'temporarily_unavailable'):
+                    raise CloudServiceError('Mailbox sign-in service is temporarily unavailable. Please try again.') from None
+                if code == 'invalid_grant':
+                    raise CloudSignInRequired('Your employee mailbox sign-in has expired. Reconnect employee mailboxes in Settings.') from None
+                raise CloudConfigurationError('Employee mailbox sign-in configuration was rejected. Ask your administrator to check the connection.') from None
+            if exc.code == 401:
+                raise CloudSignInRequired('Your employee mailbox sign-in has expired. Reconnect employee mailboxes in Settings.') from None
+            if exc.code == 403:
+                raise CloudAccessDenied('This sign-in cannot access the mailbox. Ask your administrator to check its assignment and permissions.') from None
+            if exc.code == 429 or exc.code >= 500:
+                raise CloudServiceError('Mailbox service is temporarily unavailable. Please try again. If sending, check Sent before retrying.') from None
+            raise CloudRequestError('Mailbox request was rejected. If sending, check Sent before retrying.') from None
+        except (URLError, TimeoutError, OSError):
+            raise CloudServiceError('Could not reach the mailbox service. Check your connection and try again. If sending, check Sent before retrying.') from None
+        except (UnicodeError, json.JSONDecodeError):
+            raise CloudServiceError('Mailbox service returned an unreadable response. Please try again. If sending, check Sent before retrying.') from None
 
     def _exchange(self, cfg, data):
         return self._fetch(cfg['auth_url'] + '/oauth2/token', 'POST',
                            urlencode({'client_id': cfg['client_id'], **data}).encode(),
-                           {'Content-Type': 'application/x-www-form-urlencoded'})
+                           {'Content-Type': 'application/x-www-form-urlencoded'}, oauth=True)
 
     def cloud_login(self):
         cfg = self._read(); self.validate(cfg)
@@ -116,7 +165,8 @@ class CloudMail:
         with self._lock:
             cfg = self._read(); self.validate(cfg)
             if not self._access_token or time.time() >= self._expires:
-                if not cfg.get('refresh_token'): raise ValueError('Sign in to your AWS inbox')
+                if not cfg.get('refresh_token'):
+                    raise CloudSignInRequired('Connect employee mailboxes in Settings to sign in.')
                 refresh = protect(cfg['refresh_token']['windows_dpapi'], True)
                 result = self._exchange(cfg, {'grant_type': 'refresh_token', 'refresh_token': refresh})
                 self._access_token = result['access_token']; self._expires = time.time() + result['expires_in'] - 30

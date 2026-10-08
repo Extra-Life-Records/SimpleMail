@@ -442,6 +442,7 @@ const calls = [];
 const mkStubs = () => ({
   toast: (...a) => calls.push(['toast', ...a]),
   openSettings: () => calls.push(['openSettings']),
+  showCloudStatus: () => {},
   applyScale: () => calls.push(['applyScale']),
   selectAccount: async () => calls.push(['selectAccount']),
   state: {},

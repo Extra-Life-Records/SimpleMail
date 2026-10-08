@@ -49,6 +49,20 @@ function app() {
 const mail = (uid, seen = false) => ({ uid, subject: `Message ${uid}`, seen });
 const response = (envelopes, count = 2) => ({ envelopes, folder_unread: count, inbox_unread: count });
 
+test('quiet cloud refresh exposes expired sign-in until a successful refresh', async () => {
+  const a = app();
+  a.run("state.accounts[0].provider='cloud'; state.messages=[{uid:'saved',subject:'Existing mail'}]");
+  a.api.list_messages = async () => { throw Error('Reconnect employee mailboxes in Settings.'); };
+  await a.run('loadMessages({quiet:true})');
+  assert.equal(a.run("$('cloud-status').hidden"), false);
+  assert.match(a.run("$('cloud-status-message').textContent"), /Reconnect/);
+  assert.equal(a.run('state.messages[0].uid'), 'saved');
+  a.api.list_messages = async () => response([mail('current')]);
+  await a.run('loadMessages({quiet:true})');
+  assert.equal(a.run("$('cloud-status').hidden"), true);
+  assert.equal(a.run('state.messages[0].uid'), 'current');
+});
+
 test('server search keeps body-only results and appends complete continuation pages', async () => {
   const a = app();
   a.run("$('search-box').value='body-only'; queueMailSearch()");
@@ -151,6 +165,18 @@ test('local drafts remain visible when the IMAP Drafts folder is offline', async
   await a.run('loadMessages()');
   assert.equal(a.run("state.messages[0].localDraftId"),'local-1');
   assert.equal(a.run("$('msg-list').innerHTML"),'Recover me');
+});
+
+test('local cloud drafts do not hide an expired mailbox session', async () => {
+  const a = app();
+  a.run("state.accounts[0].provider='cloud'; state.currentFolder='drafts'; state.folders=[{key:'drafts',server:'Drafts',name:'Drafts'}]");
+  a.api.list_messages = async () => { throw Error('Reconnect employee mailboxes in Settings.'); };
+  a.api.list_compose_drafts = async () => [{id:'local-1',status:'pending',updated_at:'2026-10-08',
+    payload:{to:'person@example.com',subject:'Recover me',body:'Saved work'}}];
+  await a.run('loadMessages()');
+  assert.equal(a.run("state.messages[0].localDraftId"), 'local-1');
+  assert.equal(a.run("$('cloud-status').hidden"), false);
+  assert.match(a.run("$('cloud-status-message').textContent"), /Reconnect/);
 });
 
 test('a local-only Drafts folder never marks Inbox read', async () => {
