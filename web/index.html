@@ -296,7 +296,7 @@
   #divider:hover, #divider.dragging { background: var(--pico-primary); opacity: 0.4; }
   body.dragging { cursor: col-resize; user-select: none; }
 
-  /* ---- Modal (compose / settings) ---- */
+  /* ---- Settings and review modals ---- */
   .modal-backdrop {
     position: fixed; inset: 0;
     background: rgba(15, 23, 42, 0.45);
@@ -335,6 +335,32 @@
   }
   .rich-editor:focus { border-color: var(--pico-primary); }
   .rich-editor img { max-width: 100%; border-radius: 6px; }
+  /* Compose is part of the reading pane, so the mailbox remains accessible. */
+  #compose-backdrop { display: none; flex: 1; min-height: 0; flex-direction: column; }
+  #compose-backdrop.show { display: flex; }
+  #read-pane:has(#compose-backdrop.show) > #read-header,
+  #read-pane:has(#compose-backdrop.show) > #read-body { display: none !important; }
+  .compose-toolbar { padding: 16px 24px; border-bottom: 1px solid var(--pico-muted-border-color); flex-shrink: 0; }
+  .compose-toolbar h2 { margin: 0 0 12px; font-size: 1.15rem; }
+  .compose-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+  .compose-actions button { width: auto; margin: 0; padding: 6px 14px; font-size: 0.85rem; }
+  .compose-content { flex: 1; min-height: 0; overflow-y: auto; padding: 12px 24px 28px; }
+  .compose-field { display: flex; align-items: center; gap: 12px; border-bottom: 1px solid #e5e7eb; padding: 8px 0; }
+  .compose-field > label { flex: 0 0 52px; margin: 0; font-size: 0.85rem; color: #64748b; }
+  .compose-field input { flex: 1; min-width: 0; margin: 0; padding: 6px 8px; font-size: 0.95rem; }
+  .compose-field .from-strip { border: 0; background: none; padding: 6px 8px; overflow-wrap: anywhere; min-width: 0; }
+  #compose-copies { margin: 10px 0; }
+  #compose-copies summary { font-size: 0.85rem; color: var(--pico-primary); }
+  #compose-body { min-height: 260px; max-height: none; overflow: visible; border: 0; border-radius: 0; padding: 20px 8px; overflow-wrap: anywhere; }
+  #compose-body:focus-visible { box-shadow: inset 2px 0 #bfdbfe; }
+  #compose-body blockquote { border-left: 3px solid #cbd5e1; margin: 32px 0 0; padding: 8px 16px; color: #475569; }
+  #compose-body pre { white-space: pre-wrap; font: inherit; background: none; padding: 0; }
+  #compose-save-status { padding: 8px 24px; border-top: 1px solid #e5e7eb; font-size: 0.78rem; color: #64748b; }
+  @media (max-width: 1100px) {
+    #sidebar { width: 190px; min-width: 190px; }
+    #list-pane { width: 280px; min-width: 240px; }
+    .compose-toolbar, .compose-content { padding-left: 16px; padding-right: 16px; }
+  }
   #sig-preview {
     border: 1px dashed var(--pico-muted-border-color);
     border-radius: 8px;
@@ -513,33 +539,33 @@
     <div id="read-body">
       <div id="loading">Select a message</div>
     </div>
-  </section>
 
-  <!-- Compose modal -->
-  <div class="modal-backdrop" id="compose-backdrop">
-    <div class="modal">
-      <h2>New message</h2>
-      <div class="field"><label>From (fixed to this mailbox)</label><div id="compose-from" class="from-strip"></div></div>
-      <div class="field"><label>To</label><input type="text" id="compose-to" placeholder="name@example.com"></div>
-      <details id="compose-copies"><summary>CC / BCC</summary>
-        <label for="compose-cc">CC</label><input type="text" id="compose-cc">
-        <label for="compose-bcc">BCC</label><input type="text" id="compose-bcc">
-      </details>
-      <div class="field"><label>Subject</label><input type="text" id="compose-subject"></div>
-      <div class="field"><label>Message</label>
-        <div id="compose-body" contenteditable="true" class="rich-editor"></div>
-      </div>
-      <div id="compose-attachments"></div>
-      <button id="compose-attach" class="outline" style="width:auto;align-self:flex-start;padding:5px 12px">Attach files</button>
-      <input type="file" id="compose-file-input" multiple hidden>
-      <div class="actions">
+  <!-- Inline compose workspace -->
+  <section id="compose-backdrop" aria-labelledby="compose-title">
+    <div class="compose-toolbar">
+      <h2 id="compose-title">New message</h2>
+      <div class="compose-actions">
+        <button id="send-btn">Send</button>
+        <button id="compose-attach" class="outline">Attach files</button>
         <button class="outline" id="draft-btn">Keep draft</button>
         <button class="outline secondary" id="cancel-btn">Discard</button>
-        <button id="send-btn">Send</button>
       </div>
-      <small id="compose-save-status" role="status">Saved on this device</small>
     </div>
-  </div>
+    <div class="compose-content">
+      <div class="compose-field"><label>From</label><div id="compose-from" class="from-strip" title="Sending mailbox"></div></div>
+      <div class="compose-field"><label for="compose-to">To</label><input type="text" id="compose-to" placeholder="name@example.com"></div>
+      <details id="compose-copies"><summary>CC / BCC</summary>
+        <div class="compose-field"><label for="compose-cc">CC</label><input type="text" id="compose-cc"></div>
+        <div class="compose-field"><label for="compose-bcc">BCC</label><input type="text" id="compose-bcc"></div>
+      </details>
+      <div class="compose-field"><label for="compose-subject">Subject</label><input type="text" id="compose-subject"></div>
+      <div id="compose-attachments"></div>
+      <input type="file" id="compose-file-input" multiple hidden>
+      <div id="compose-body" contenteditable="true" class="rich-editor" role="textbox" aria-label="Message" aria-multiline="true"></div>
+    </div>
+    <small id="compose-save-status" role="status">Saved on this device</small>
+  </section>
+  </section>
 
   <!-- Settings modal -->
   <div class="modal-backdrop" id="settings-backdrop">

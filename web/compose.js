@@ -3,6 +3,27 @@
 let composeSession = null;
 let composeSaveTimer = null;
 
+function composeVisible() {
+  return $("compose-backdrop").classList.contains("show");
+}
+
+function hideCompose() {
+  $("compose-backdrop").classList.remove("show");
+  $(state.selectedUid ? "reply-btn" : "compose-btn").focus();
+}
+
+function focusComposeBody() {
+  const body = $("compose-body");
+  body.focus();
+  const range = document.createRange();
+  range.selectNodeContents(body);
+  range.collapse(true);
+  const selection = window.getSelection();
+  selection.removeAllRanges();
+  selection.addRange(range);
+  body.closest(".compose-content").scrollTop = 0;
+}
+
 function setComposeBusy(session, busy) {
   session.busy = busy;
   document.querySelectorAll("#compose-backdrop button,#compose-backdrop input").forEach(control => { control.disabled = busy; });
@@ -81,14 +102,16 @@ async function persistCompose() {
 }
 
 async function closeCompose() {
-  if (!composeSession || composeSession.busy) return;
+  if (!composeVisible()) return true;
+  if (!composeSession || composeSession.busy) return false;
   const session = composeSession;
   setComposeBusy(session, true);
   try {
     await persistCompose();
-    $("compose-backdrop").classList.remove("show");
+    hideCompose();
     if (state.currentFolder === "drafts") loadMessages();
-  } catch (error) { toast("Keep this draft open until saving succeeds: " + error, true); }
+    return true;
+  } catch (error) { toast("Keep this draft open until saving succeeds: " + error, true); return false; }
   finally { setComposeBusy(session, false); }
 }
 
@@ -100,7 +123,7 @@ async function discardCompose() {
     await persistCompose();
     await api.discard_compose_draft(session.accountId, session.id, session.revision);
     clearComposeRecovery(session);
-    $("compose-backdrop").classList.remove("show");
+    hideCompose();
     if (state.currentFolder === "drafts") loadMessages();
   } catch (error) { toast("Could not discard draft: " + error, true); }
   finally { setComposeBusy(session, false); }
@@ -121,6 +144,9 @@ function composeRecoveryDrafts(accountId, drafts) {
 }
 
 async function resumeComposeDraft(draftId) {
+  const request = ++composeRequest;
+  if (composeVisible() && !(await closeCompose())) return;
+  if (request !== composeRequest) return;
   const accountId = state.activeAccountId;
   const account = activeAccount();
   let draft;
@@ -128,7 +154,7 @@ async function resumeComposeDraft(draftId) {
   try { cached = JSON.parse(localStorage.getItem(recoveryKey({accountId, id:draftId})) || "null"); } catch {}
   try { draft = await api.get_compose_draft(accountId, draftId); }
   catch (error) { if (cached?.account_id === accountId && cached.revision === 0) draft = cached; else { toast(String(error), true); return; } }
-  if (accountId !== state.activeAccountId) return;
+  if (request !== composeRequest || accountId !== state.activeAccountId) return;
   if (draft.status !== "pending") {
     if (draft.status === "sent") clearComposeRecovery({accountId,id:draftId});
     toast(draft.status === "sent" ? "This draft was already sent" : "Delivery needs checking. Check Sent before creating another message.", true);
@@ -144,6 +170,7 @@ async function resumeComposeDraft(draftId) {
   $("compose-from").textContent = `${account.label} <${account.identity}>`;
   $("compose-to").value = draft.payload.to;
   $("compose-subject").value = draft.payload.subject;
+  $("compose-title").textContent = "Draft";
   $("compose-cc").value = draft.payload.cc || "";
   $("compose-bcc").value = draft.payload.bcc || "";
   $("compose-copies").open = !!(draft.payload.cc || draft.payload.bcc);
@@ -161,7 +188,7 @@ async function resumeComposeDraft(draftId) {
   });
   $("compose-body").innerHTML = parsed.body.innerHTML || escapeHtml(draft.payload.body);
   $("compose-backdrop").classList.add("show");
-  $("compose-body").focus();
+  focusComposeBody();
   composeChanged();
 }
 
