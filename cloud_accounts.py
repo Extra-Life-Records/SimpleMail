@@ -35,7 +35,9 @@ class CloudAccounts:
         self.accounts = {PREFIX + row['name']: {
             'id': PREFIX + row['name'], 'provider': 'cloud',
             'label': row['address'], 'email': row['address'], 'identity': row['address'],
-            'color': '#2563eb', 'signature': '', 'rules': {}, 'assignment': row['state']}
+            'color': '#2563eb',
+            'signature': self.owner.cfg.data.get('cloud_signatures', {}).get(PREFIX + row['name'], ''),
+            'rules': {}, 'assignment': row['state']}
             for row in rows if re.fullmatch(r'[a-z0-9_-]+', row['name'])}
         return list(self.accounts.values())
 

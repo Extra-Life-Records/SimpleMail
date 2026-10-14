@@ -10,6 +10,7 @@ const assert=require('node:assert/strict');
    const accounts=[{id:'hello',label:'Extra Life Records',identity:'hello@extraliferecords.com'},
     {id:'play',label:'Playloudr',identity:'hello@playloudr.com'},
     ...['one','two','three','four','five'].map(n=>({id:'cloud:'+n,label:n+'@extraliferecords.com',identity:n+'@extraliferecords.com',provider:'cloud'}))];
+   accounts.forEach(account=>{account.email=account.identity;});
    window.calls=[];
    window.pywebview={api:{
     get_config:async()=>({accounts,active_account:'hello',cloud_configured:true}),
@@ -20,6 +21,7 @@ const assert=require('node:assert/strict');
     search_messages:async(id)=>({items:[{uid:'abc',server_uid:'abc',server_folder:'Inbox',sender:'Sender',subject:'Search '+id,seen:true}],next_cursor:null}),
     get_compose_context:async(id)=>({to:'sender@example.invalid',subject:'Reply for '+id,text:'Quoted '+id,sender:'Sender',date:'Today'}),
     save_compose_draft:async(...args)=>{calls.push(args);return {id:args[1],revision:args[2]+1};},
+    save_config:async data=>{for(const a of data.accounts) accounts.find(item=>item.id===a.id).signature=a.signature;return {ok:true};},
     list_compose_drafts:async()=>[]
    }};
   });
@@ -52,7 +54,39 @@ const assert=require('node:assert/strict');
   await page.locator('#accounts').getByRole('button',{name:'Extra Life Records',exact:true}).click();
   await page.getByText('Message for hello',{exact:true}).waitFor();
   assert.equal(await page.getByText('Body for cloud:five',{exact:true}).count(),0);
+  // All seven identities have independent signature settings, including cloud mail.
+  await page.locator('#settings-btn').click();
+  await page.locator('#settings-backdrop.show').waitFor();
+  assert.equal(await page.locator('#set-account-picker option').count(),7);
+  for(let index=0;index<7;index++) {
+   await page.locator('#set-account-picker').selectOption(String(index));
+   assert.equal(await page.locator('#mail-connection-fields').isVisible(),index<2);
+   assert.equal(await page.locator('#test-btn').isVisible(),index<2);
+   assert.equal(await page.locator('#acct-remove-btn').isDisabled(),index>=2);
+   await page.locator('#set-signature').fill('<strong>Adam</strong><br>Mailbox '+index+'<br><a href="https://example.invalid">Website</a>');
+  }
+  await page.locator('#set-account-picker').selectOption('0');
+  assert((await page.locator('#set-signature').inputValue()).includes('Mailbox 0'));
+  await page.locator('#settings-save').click();
+  await page.locator('#settings-backdrop').waitFor({state:'hidden'});
+  await page.waitForFunction(()=>state.messages.length>0);
+  // Reopen settings to prove the values come back from the saved config.
+  await page.locator('#settings-btn').click();
+  await page.locator('#settings-backdrop.show').waitFor();
+  await page.locator('#set-account-picker').selectOption('6');
+  assert((await page.locator('#set-signature').inputValue()).includes('Mailbox 6'));
+  await page.locator('#settings-cancel').click();
+  for(let index=0;index<7;index++) {
+   await page.locator('#accounts button').nth(index).click();
+   await page.waitForFunction(()=>state.messages.length>0);
+   await page.locator('#compose-btn').click();
+   await page.locator('#compose-backdrop.show').waitFor();
+   assert.equal(await page.locator('#compose-body strong').innerText(),'Adam');
+   assert((await page.locator('#compose-body').innerText()).includes('Mailbox '+index));
+   await page.locator('#draft-btn').click();
+   await page.locator('#compose-backdrop').waitFor({state:'hidden'});
+  }
   assert.deepEqual(errors,[]);
-  console.log('Unified sidebar, five inbox readers, reply identity, drafts, search and return to IMAP passed.');
+  console.log('Unified sidebar, five inbox readers, reply identity, drafts, search, return to IMAP and seven independent saved signatures passed.');
  } finally {await browser.close();}
 })().catch(e=>{console.error(e);process.exitCode=1});

@@ -687,6 +687,8 @@ function renderAccountPicker() {
 function stashAccountForm() {
   const a = editAccounts[editIndex];
   if (!a) return;
+  a.signature = $("set-signature").value;
+  if (a.provider === "cloud") return;
   a.label = $("set-label").value.trim();
   a.color = $("set-color").value;
   a.email = $("set-email").value.trim();
@@ -700,12 +702,19 @@ function stashAccountForm() {
   a.smtp_password = $("set-smtp-password").value;
   a.clear_smtp_password = $("set-smtp-use-mailbox").checked;
   if (a.clear_smtp_password) a.smtp_password = "";
-  a.signature = $("set-signature").value;
 }
 
 function showAccountForm(i) {
   editIndex = i;
   const a = editAccounts[i] || { ...BLANK_ACCOUNT };
+  const cloud = a.provider === "cloud";
+  $("mail-connection-fields").hidden = cloud;
+  $("mail-server-settings").hidden = cloud;
+  $("mail-rules-settings").hidden = cloud;
+  $("cloud-mailbox-info").hidden = !cloud;
+  $("cloud-mailbox-info").textContent = cloud ? `Signature for ${a.identity}. This mailbox is managed through your employee sign-in.` : "";
+  $("acct-remove-btn").disabled = cloud;
+  $("test-btn").hidden = cloud;
   $("set-label").value = a.label || "";
   $("set-color").value = a.color || "#2563eb";
   $("set-email").value = a.email || "";
@@ -749,7 +758,7 @@ function removeAccount() {
 
 async function openSettings() {
   const cfg = await api.get_config();
-  editAccounts = (cfg.accounts || []).filter(a => a.provider !== "cloud").map((a) => ({ ...a }));
+  editAccounts = (cfg.accounts || []).map((a) => ({ ...a }));
   if (!editAccounts.length) editAccounts = [{ ...BLANK_ACCOUNT }];
   const activeIdx = editAccounts.findIndex((a) => a.id === cfg.active_account);
   $("set-scale").value = cfg.ui_scale || "default";
