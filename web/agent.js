@@ -5,6 +5,8 @@ let agentView = null;
 let agentRequest = 0;
 
 async function openAgent(tab = "job") {
+  if (typeof composeVisible === "function" && composeVisible() && !(await closeCompose())) return;
+  if (typeof composeRequest !== "undefined") ++composeRequest;
   if (agentVisible() && (agentView?.busy || !agentDiscardAllowed())) return;
   const acct = activeAccount();
   if (!acct) { toast("Add a mailbox first", true); return; }

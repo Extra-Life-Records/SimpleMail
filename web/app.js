@@ -210,6 +210,8 @@ function renderAccounts() {
 }
 
 async function selectAccount(accountId) {
+  if (typeof composeVisible === "function" && composeVisible() && !(await closeCompose())) return;
+  ++composeRequest;
   if (typeof leaveAgentWorkspace === "function" && !leaveAgentWorkspace()) return;
   if (!state.accounts.some((a) => a.id === accountId)) return;
   const view = resetMailboxView();
@@ -269,7 +271,9 @@ function renderFolders() {
   });
 }
 
-function selectFolder(key) {
+async function selectFolder(key) {
+  if (typeof composeVisible === "function" && composeVisible() && !(await closeCompose())) return;
+  ++composeRequest;
   if (typeof leaveAgentWorkspace === "function" && !leaveAgentWorkspace()) return;
   resetMailboxView();
   state.currentFolder = key;
@@ -404,6 +408,8 @@ function renderMessages() {
 /* ---------------- reading ---------------- */
 
 async function openMessage(uid, el) {
+  if (typeof composeVisible === "function" && composeVisible() && !(await closeCompose())) return;
+  ++composeRequest;
   const view = mailboxView;
   const request = ++messageReadRequest;
   const accountId = state.activeAccountId;
@@ -523,8 +529,13 @@ function updateUnreadCount(delta = 0, server = null) {
    id, so there is no way to send from the wrong mailbox. */
 
 let composeAccountId = null;
+let composeRequest = 0;
 
-function openCompose(to = "", subject = "", quoteHtml = "", options = {}) {
+async function openCompose(to = "", subject = "", quoteHtml = "", options = {}) {
+  const request = ++composeRequest;
+  if (composeVisible() && !(await closeCompose())) return;
+  if (request !== composeRequest) return;
+  if (typeof leaveAgentWorkspace === "function" && !leaveAgentWorkspace()) return;
   const acct = activeAccount();
   if (!acct) { toast("Add an account in Settings first", true); return; }
   composeAccountId = acct.id;
@@ -541,21 +552,22 @@ function openCompose(to = "", subject = "", quoteHtml = "", options = {}) {
     `${escapeHtml(acct.label)} &lt;${escapeHtml(acct.identity)}&gt;`;
   $("compose-to").value = to;
   $("compose-subject").value = subject;
+  $("compose-title").textContent = options.title || "New message";
   const body = $("compose-body");
-  body.innerHTML = "";
-  if (quoteHtml) {
-    const bq = document.createElement("blockquote");
-    bq.style.cssText = "border-left:3px solid #cbd5e1;margin:0 0 10px;padding:2px 12px;color:#475569;";
-    bq.innerHTML = quoteHtml;
-    body.appendChild(bq);
-  }
+  body.innerHTML = "<div><br></div><div><br></div>";
   if (acct.signature) {
     const sig = document.createElement("div");
     sig.innerHTML = acct.signature.replace(/\n/g, "<br>");
     body.appendChild(sig);
   }
+  if (quoteHtml) {
+    const bq = document.createElement("blockquote");
+    bq.innerHTML = quoteHtml;
+    body.appendChild(bq);
+  }
   $("compose-backdrop").classList.add("show");
-  $("compose-to").focus();
+  if (to) focusComposeBody();
+  else $("compose-to").focus();
   composeChanged();
 }
 
@@ -583,7 +595,7 @@ async function sendCompose() {
     await persistCompose();
     const res = await api.send_compose_draft(session.accountId, session.id, session.revision);
     clearComposeRecovery(session);
-    $("compose-backdrop").classList.remove("show");
+    hideCompose();
     if (res.status === "uncertain") {
       toast(res.warning, true);
       if (state.currentFolder === "drafts") loadMessages();
@@ -612,7 +624,7 @@ async function saveDraft() {
   setComposeBusy(session, true);
   try {
     await persistCompose();
-    $("compose-backdrop").classList.remove("show");
+    hideCompose();
     toast("Draft saved on this device");
     if (state.currentFolder === "drafts" && composeAccountId === state.activeAccountId) loadMessages();
   } catch (e) {
@@ -1005,17 +1017,19 @@ async function forwardMessage() {
 }
 
 async function openCorrespondence(message, forward, replyAll) {
+  const request = ++composeRequest;
   const accountId = state.activeAccountId;
   const view = mailboxView;
   const folder = messageLocation(message);
   try {
     const context = await api.get_compose_context(accountId, folder.server, folder.uid, replyAll, forward, folder.validity);
-    if (view !== mailboxView || accountId !== state.activeAccountId || message.uid !== state.selectedUid) return;
+    if (request !== composeRequest || view !== mailboxView || accountId !== state.activeAccountId || message.uid !== state.selectedUid) return;
     let subject = context.subject;
     if (forward ? !/^fwd?:/i.test(subject) : !/^re:/i.test(subject)) subject = (forward ? "Fwd: " : "Re: ") + subject;
     const quote = `<div><i>On ${escapeHtml(context.date)}, ${escapeHtml(shortFrom(context.sender))} wrote:</i></div>` +
       `<pre style="white-space:pre-wrap">${escapeHtml(context.text)}</pre>`;
-    openCompose(forward ? "" : context.to, subject, quote, context);
+    await openCompose(forward ? "" : context.to, subject, quote,
+      {...context, title: forward ? "Forward" : replyAll ? "Reply all" : "Reply"});
   } catch (error) { toast("Could not prepare message: " + error, true); }
 }
 
