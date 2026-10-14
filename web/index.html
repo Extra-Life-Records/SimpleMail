@@ -100,6 +100,7 @@
     border-radius: 8px; padding: 8px 12px; font-size: 0.88rem; color: #374151;
   }
   .settings-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 0 14px; }
+  .settings-grid[hidden] { display: none; }
   .settings-grid .field.wide { grid-column: 1 / -1; }
   .acct-toolbar { display: flex; gap: 8px; align-items: center; margin-bottom: 12px; }
   .acct-toolbar select { margin: 0; flex: 1; }
@@ -577,13 +578,14 @@
         <button class="outline" id="acct-add-btn">+ Add account</button>
         <button class="outline secondary" id="acct-remove-btn">Remove</button>
       </div>
-      <div class="settings-grid">
+      <p id="cloud-mailbox-info" hidden></p>
+      <div class="settings-grid" id="mail-connection-fields">
         <div class="field"><label>Account name (shown in sidebar & as sender name)</label><input type="text" id="set-label" placeholder="Playloudr"></div>
         <div class="field"><label>Colour</label><input type="color" id="set-color" value="#2563eb" style="height:42px;padding:4px"></div>
         <div class="field"><label>Mailbox email (login)</label><input type="text" id="set-email" placeholder="name@example.com"></div>
         <div class="field"><label>Mailbox password</label><input type="password" id="set-password"></div>
       </div>
-      <details class="advanced">
+      <details class="advanced" id="mail-server-settings">
         <summary>Advanced — identity &amp; servers (only when sending address differs from the mailbox)</summary>
         <div class="settings-grid" style="margin-top:10px">
           <div class="field wide"><label>Send as (From address — leave blank to use the mailbox email)</label><input type="text" id="set-from-email" placeholder="hello@yourdomain.com"></div>
@@ -595,7 +597,7 @@
           <div class="field"><label>SMTP password</label><input type="password" id="set-smtp-password"><label><input type="checkbox" id="set-smtp-use-mailbox"> Use mailbox password instead</label></div>
         </div>
       </details>
-      <div class="field"><label>Signature for this account (added to new messages)</label>
+      <div class="field"><label for="set-signature">Signature for this account (new messages, replies and forwards)</label>
         <textarea id="set-signature" style="min-height:90px"></textarea>
         <div id="sig-preview"></div>
         <button class="outline" id="sig-image-btn" style="margin-top:8px; padding:3px 12px; font-size:0.8rem; width:auto">🖼 Add image to signature</button></div>
@@ -605,7 +607,7 @@
           <option value="default" selected>Default</option>
           <option value="large">Large</option>
         </select></div>
-      <div class="field"><label>Learned rules for this account (right-click a message to teach the app)</label>
+      <div class="field" id="mail-rules-settings"><label>Learned rules for this account (right-click a message to teach the app)</label>
         <div id="rules-list" style="font-size:0.82rem"></div></div>
       <div class="field" style="display:flex;align-items:center;gap:10px">
         <button class="outline" id="upd-check" style="padding:3px 12px;font-size:0.8rem;width:auto;margin:0">Check for updates</button>

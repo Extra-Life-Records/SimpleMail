@@ -45,6 +45,38 @@ class UnifiedInboxTests(unittest.TestCase):
         self.assertEqual(inspect.getfullargspec(self.api.get_message).args,
                          ['self','account_id','server_folder','uid','validity'])
 
+    def test_cloud_signatures_persist_per_mailbox_without_changing_identity(self):
+        cfg = self.api.get_config()
+        cfg['active_account'] = 'cloud:one'
+        one = next(a for a in cfg['accounts'] if a['id'] == 'cloud:one')
+        one.update(signature='<b>Adam</b><br>Extra Life Records', email='spoof@example.com')
+        next(a for a in cfg['accounts'] if a['id'] == 'cloud:two')['signature'] = 'Adam / Two'
+        self.api.save_config(cfg)
+        self.cfg.load()
+        restored = {a['id']: a for a in self.api.get_config()['accounts']}
+        self.assertEqual(restored['cloud:one']['signature'], '<b>Adam</b><br>Extra Life Records')
+        self.assertEqual(restored['cloud:two']['signature'], 'Adam / Two')
+        self.assertEqual(restored['cloud:three']['signature'], '')
+        self.assertEqual(restored['cloud:one']['identity'], 'one@extraliferecords.com')
+        self.assertEqual(self.cfg.data['active_account'], 'cloud:one')
+        self.assertEqual([a['id'] for a in self.cfg.accounts()], ['hello'])
+        # An offline/partial settings save must not erase hidden cloud preferences.
+        self.api.save_config({'accounts': [restored['hello']]})
+        self.assertEqual(self.cfg.data['cloud_signatures']['cloud:two'], 'Adam / Two')
+
+    def test_cloud_signature_save_failure_keeps_previous_preferences(self):
+        cfg = self.api.get_config()
+        cfg['accounts'][1]['signature'] = 'Adam'
+        with patch.object(self.cfg, 'save', side_effect=OSError('disk full')):
+            with self.assertRaises(OSError):
+                self.api.save_config(cfg)
+        self.assertNotIn('cloud_signatures', self.cfg.data)
+
+    def test_unknown_cloud_signature_cannot_create_a_mailbox(self):
+        with self.assertRaises(KeyError):
+            self.api.save_config({'accounts': [{'id': 'cloud:unknown', 'signature': 'Adam'}]})
+        self.assertNotIn('cloud_signatures', self.cfg.data)
+
     def test_filtered_empty_pages_are_followed(self):
         self.transport.cloud_request.side_effect = [
             {'messages':[], 'cursor':'next'},

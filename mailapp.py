@@ -57,7 +57,7 @@ else:
     _WEBVIEW_IMPORT_ERROR = None
 
 APP_NAME = "SimpleMail"
-APP_VERSION = "1.9.5"
+APP_VERSION = "1.9.6"
 APP_REPO = "Extra-Life-Records/SimpleMail"  # owner/repo for auto-updates
 CONFIG_DIR = Path(os.environ.get("APPDATA", str(Path.home()))) / APP_NAME
 CONFIG_FILE = CONFIG_DIR / "config.json"
@@ -1222,8 +1222,19 @@ class Api:
         existing_rules = {a["id"]: a.get("rules", {}) for a in self.cfg.accounts()}
         accounts = []
         seen_ids = set()
+        cloud_ids = set()
+        cloud_signatures = dict(self.cfg.data.get("cloud_signatures", {}))
         for raw in incoming:
             if str(raw.get("id", "")).startswith("cloud:") or raw.get("provider") == "cloud":
+                account_id = raw.get("id", "")
+                if not str(account_id).startswith("cloud:"):
+                    raise ValueError("Invalid cloud mailbox")
+                self._acct(account_id)  # Only currently accessible mailboxes may be edited.
+                cloud_ids.add(account_id)
+                if "signature" in raw:
+                    if not isinstance(raw["signature"], str):
+                        raise ValueError("Signature must be text")
+                    cloud_signatures[account_id] = raw["signature"]
                 continue
             acct = normalize_account(raw)
             while acct["id"] in seen_ids:  # keep ids unique
@@ -1234,10 +1245,11 @@ class Api:
                 acct["rules"] = existing_rules.get(acct["id"], {})
             accounts.append(acct)
         active = data.get("active_account", "")
-        if not any(a["id"] == active for a in accounts):
-            active = accounts[0]["id"] if accounts else ""
+        if active not in cloud_ids and not any(a["id"] == active for a in accounts):
+            active = accounts[0]["id"] if accounts else next(iter(sorted(cloud_ids)), "")
         updated = dict(self.cfg.data)
         updated["accounts"] = accounts
+        updated["cloud_signatures"] = cloud_signatures
         updated["active_account"] = active
         if data.get("ui_scale") in ("compact", "default", "large"):
             updated["ui_scale"] = data["ui_scale"]
