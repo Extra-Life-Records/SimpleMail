@@ -21,6 +21,8 @@ owner's x64 machine and is published with native x64 and ARM64 downloads.
 - ✅ **Real HTML email rendering** (sandboxed; remote images blocked until Load images)
 
 - ✅ **Compose with signature** — set it once in Settings, auto-appended
+- ✅ **Signature logos** — embedded images travel with the email, and keep their
+  dimensions when you reopen a saved draft.
 - ✅ **A signature for every mailbox** — including employee cloud mailboxes;
   choose an account in Settings to edit its own signature.
 - ✅ **Write in the reading pane** — new messages, replies and forwards stay in

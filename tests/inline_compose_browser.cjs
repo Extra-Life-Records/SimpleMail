@@ -10,7 +10,7 @@ const path = require('node:path');
     page.on('pageerror', error => errors.push(error.message));
     await page.addInitScript(() => {
       const accounts = [
-        {id: 'one', label: 'Studio', identity: 'studio@example.invalid', color: '#2563eb', signature: 'Best,<br>Alex'},
+        {id: 'one', label: 'Studio', identity: 'studio@example.invalid', color: '#2563eb', signature: 'Best,<br>Alex<br><img alt="Studio logo" width="64" height="64" src="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jRZkAAAAASUVORK5CYII=">'},
         {id: 'two', label: 'Other mailbox', identity: 'other@example.invalid', color: '#059669'},
       ];
       window.drafts = {};
@@ -73,6 +73,10 @@ const path = require('node:path');
     assert.equal(first.payload.in_reply_to, '<original@example.invalid>');
     assert.deepEqual(first.payload.attachment_ids, ['added-file']);
     await page.evaluate(id => resumeComposeDraft(id), firstId);
+    assert.equal(await page.locator('#compose-body img').getAttribute('width'), '64');
+    assert.equal(await page.locator('#compose-body img').getAttribute('height'), '64');
+    assert.equal(await page.locator('#compose-body img').getAttribute('alt'), 'Studio logo');
+    assert(await page.locator('#compose-body img').evaluate(img => img.complete && img.naturalWidth > 0));
     assert((await page.locator('#compose-body').innerText()).startsWith('Hi Jamie'));
     assert.equal(await page.getByRole('button', {name: 'Remove brief.txt'}).count(), 1);
 

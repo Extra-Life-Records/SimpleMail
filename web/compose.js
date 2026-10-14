@@ -181,9 +181,17 @@ async function resumeComposeDraft(draftId) {
   parsed.body.querySelectorAll("*").forEach(element => {
     if (!allowed.has(element.tagName)) { element.replaceWith(...element.childNodes); return; }
     const image = element.tagName === "IMG" ? element.getAttribute("src") : null;
+    const imageSize = image ? [element.getAttribute("width"), element.getAttribute("height")] : [];
+    const imageAlt = image ? element.getAttribute("alt") : null;
     const link = element.tagName === "A" ? safeEmailLink(element.getAttribute("href")) : null;
     for (const attr of Array.from(element.attributes)) element.removeAttribute(attr.name);
-    if (image && /^data:image\/(png|gif|jpeg|webp);base64,/i.test(image)) element.setAttribute("src", image);
+    if (image && /^data:image\/(png|gif|jpeg|webp);base64,/i.test(image)) {
+      element.setAttribute("src", image);
+      ["width", "height"].forEach((name, index) => {
+        if (/^[1-9]\d{0,3}$/.test(imageSize[index] || "")) element.setAttribute(name, imageSize[index]);
+      });
+      if (imageAlt) element.setAttribute("alt", imageAlt);
+    }
     if (link) { element.setAttribute("href", link); element.setAttribute("rel", "noopener noreferrer"); }
   });
   $("compose-body").innerHTML = parsed.body.innerHTML || escapeHtml(draft.payload.body);
