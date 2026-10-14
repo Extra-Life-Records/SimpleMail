@@ -28,6 +28,7 @@ from pathlib import Path
 import html as html_lib
 from html.parser import HTMLParser
 from mail_credentials import unlock_account, write_config
+from mail_inline_images import set_message_body
 from window_state import load_placement, remember_window
 from cloud_accounts import CloudAccounts, route_cloud
 from cloud_mail import (CloudSignInRequired, CloudAccessDenied, CloudConfigurationError,
@@ -57,7 +58,7 @@ else:
     _WEBVIEW_IMPORT_ERROR = None
 
 APP_NAME = "SimpleMail"
-APP_VERSION = "1.9.6"
+APP_VERSION = "1.9.7"
 APP_REPO = "Extra-Life-Records/SimpleMail"  # owner/repo for auto-updates
 CONFIG_DIR = Path(os.environ.get("APPDATA", str(Path.home()))) / APP_NAME
 CONFIG_FILE = CONFIG_DIR / "config.json"
@@ -608,11 +609,7 @@ def send_message(acct, to, subject, body, body_html=None, save_sent=True,
         msg["In-Reply-To"] = in_reply_to
     if references:
         msg["References"] = references
-    if body_html:
-        msg.set_content(body or "")
-        msg.add_alternative(body_html, subtype="html")
-    else:
-        msg.set_content(body or "")
+    set_message_body(msg, body, body_html)
     for attachment in attachments or []:
         maintype, subtype = attachment["content_type"].split("/", 1)
         msg.add_attachment(attachment["data"], maintype=maintype, subtype=subtype, filename=attachment["name"])
@@ -649,11 +646,7 @@ def save_draft_message(acct, to, subject, body, body_html=None):
     msg["From"] = from_address(acct)
     msg["To"] = to
     msg["Subject"] = subject
-    if body_html:
-        msg.set_content(body or "")
-        msg.add_alternative(body_html, subtype="html")
-    else:
-        msg.set_content(body or "")
+    set_message_body(msg, body, body_html)
     imap, folders, _ = connect_imap(acct)
     try:
         drafts = next((f for f in folders if f.lower() in ("drafts",)), "Drafts")
