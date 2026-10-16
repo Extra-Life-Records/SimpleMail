@@ -260,6 +260,26 @@ store, Pause and model-worker imports also pass with isolated config. Real model
 quality, provider access, startup lifecycle and a live model/mailbox workflow have
 not been verified.
 
+## Read-only access from a cloud session
+
+`env_mail_mcp.py` serves one mailbox to hosts without the desktop's settings,
+such as a scheduled Claude Code cloud session. It reads the login from
+environment variables only, never from `config.json`:
+
+| Variable | Value |
+| --- | --- |
+| `SIMPLEMAIL_EMAIL` | IMAP login (required) |
+| `SIMPLEMAIL_PASSWORD` | IMAP password or app password (required) |
+| `SIMPLEMAIL_IMAP_HOST` | Optional, default `mail.livemail.co.uk` |
+| `SIMPLEMAIL_IMAP_PORT` | Optional, default `993` |
+
+It offers `mailbox_unread` plus the search and read tools above. It cannot
+draft, send, file or mark mail as read. The repository's `.mcp.json` registers
+it as `simplemail-inbox`. Set the variables as secrets in the cloud environment,
+and allow `mail.livemail.co.uk` in the environment's network policy: the default
+policy blocks it. `python3 env_mail_mcp.py check` logs in and prints the unread
+count, without the password.
+
 ## Verification
 
 ```powershell
