@@ -162,7 +162,7 @@ class MailboxAgent:
             raise ValueError("Folder was recreated; search again before using this message")
         return ref
 
-    def search(self, folder="INBOX", query="", cursor=None, limit=25, header_id=None):
+    def search(self, folder="INBOX", query="", cursor=None, limit=25, header_id=None, unseen=False):
         """IMAP TEXT searches the full folder, not the desktop's loaded page."""
         clean_string(query, "search query", 1000)
         if header_id is not None:
@@ -177,7 +177,7 @@ class MailboxAgent:
                 if (page.get("account"), page.get("folder"), page.get("validity"), page.get("query")) != (
                         self.account_id, folder, validity, query):
                     raise ValueError("Cursor does not match this mailbox search")
-                if page.get("header_id") != header_id:
+                if page.get("header_id") != header_id or bool(page.get("unseen")) != unseen:
                     raise ValueError("Cursor does not match this search type")
                 before = page.get("before")
                 if not isinstance(before, int) or before < 1:
@@ -189,9 +189,9 @@ class MailboxAgent:
             elif query:
                 # Literal avoids allowing text to become IMAP search operators.
                 imap.literal = query.encode("utf-8")
-                typ, data = imap.uid("search", "CHARSET", "UTF-8", "TEXT")
+                typ, data = imap.uid("search", "CHARSET", "UTF-8", *(("UNSEEN",) if unseen else ()), "TEXT")
             else:
-                typ, data = imap.uid("search", None, "ALL")
+                typ, data = imap.uid("search", None, "UNSEEN" if unseen else "ALL")
             if typ != "OK" or not data or data[0] is None:
                 raise ValueError("Mailbox search failed")
             uids = sorted({int(uid) for uid in data[0].split()}, reverse=True)
@@ -233,7 +233,8 @@ class MailboxAgent:
                     item["seen"] = flags_by_uid.get(item["uid"])
                 items.sort(key=lambda item: int(item["uid"]), reverse=True)
             next_cursor = pack({"account": self.account_id, "folder": folder, "validity": validity,
-                                "query": query, "header_id": header_id, "before": page[-1]}) if len(remaining) > limit else None
+                                "query": query, "header_id": header_id, "unseen": unseen,
+                                "before": page[-1]}) if len(remaining) > limit else None
             return {"items": items, "total_matches": total, "next_cursor": next_cursor,
                     "scope": "complete_folder", "untrusted_content": True}
 
