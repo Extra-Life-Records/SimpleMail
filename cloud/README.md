@@ -231,7 +231,7 @@ sam deploy --region eu-west-1 --profile <operator-profile> --stack-name playloud
   --capabilities CAPABILITY_IAM --resolve-s3 --no-execute-changeset `
   --parameter-overrides AuthDomain=<live> CallbackUrl=<live> Domain=<live> ReceiveDomain=<live> `
   BudgetEmail=<live> SendingEnabled=<live> ApiReservedConcurrency=<live> CreateSendingIdentity=<live> `
-  ReaderEnabled=true
+  ReaderEnabled=true ExternalMailboxesSecret=<secret ARN, or leave out for AWS mailboxes only>
 ```
 
 Review the change set before executing it. Expect **Add** for the `Reader*` resources (resource
@@ -252,6 +252,33 @@ user pool > App clients > `mail-reader`. In the Claude cloud environment:
   `SIMPLEMAIL_CLOUD_API_URL=<ReaderApiUrl>`, `SIMPLEMAIL_CLOUD_AUTH_URL=<AuthUrl>`,
   `SIMPLEMAIL_CLOUD_CLIENT_ID=<ReaderClientId>`.
 - Check from a session: `python3 env_mail_mcp.py check` lists the readable addresses.
+
+### Fasthosts mailboxes through the reader
+
+The owner's Fasthosts inboxes (hello@extraliferecords.com, hello@playloudr.com) can be
+served by the same robot, so Claude never holds their passwords. `src/external.py` logs in
+over IMAP from AWS on each request. The same rules apply: read-only selects and `BODY.PEEK`, so
+nothing is marked read; moves between Inbox and Junk only, by `UID MOVE`, and refused if the
+server lacks `MOVE` (no flag-and-expunge); drafts are new messages APPENDed to Drafts with
+`In-Reply-To` set; never send, never delete. Triage results, moves and draft claims are kept in the table
+under `external#<name>`. A retried draft request never appends twice, and a failed APPEND
+can be retried.
+
+1. In the AWS console (Ireland, eu-west-1): Secrets Manager > Store a new secret > *Other type*
+   > *Plaintext*, named e.g. `simplemail/fasthosts`, with:
+   ```json
+   {"mailboxes": [
+     {"name": "elr", "address": "hello@extraliferecords.com", "username": "hello@extraliferecords.com",
+      "password": "<type it here>", "host": "mail.livemail.co.uk", "port": 993},
+     {"name": "playloudr", "address": "hello@playloudr.com", "username": "hello@playloudr.com",
+      "password": "<type it here>", "host": "mail.livemail.co.uk", "port": 993}]}
+   ```
+   Names are 2-10 lowercase letters and can't be one to five. Type the passwords only into AWS.
+2. Deploy with `ExternalMailboxesSecret=<the secret's ARN>` added to the parameters. Only
+   `ReaderFunction` may read that one secret (`secretsmanager:GetSecretValue`).
+3. A changed password takes effect within five minutes (the function caches the secret).
+
+About $0.40/month for the secret. Mail is fetched on demand, not copied into AWS.
 
 Off switch: redeploy with `ReaderEnabled=false`, which deletes the client, so every token stops within the hour.
 To rotate the key, redeploy with `ReaderEnabled=false`, then `true`. That recreates the client and the

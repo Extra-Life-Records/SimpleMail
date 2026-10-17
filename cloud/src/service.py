@@ -429,13 +429,17 @@ def read_message(s3, row, tail):
         if row.get('kind') == 'draft': return {**public(row), 'draft': json.loads(raw)}
         return {**public(row), **parse(raw)}
     if len(tail) == 4 and tail[2] == 'attachments' and tail[3].isdigit():
-        for index, part in enumerate(message_from_bytes(raw, policy=default).walk()):
-            if index == int(tail[3]) and (part.get_filename() or part.get_content_disposition() == 'attachment'):
-                payload = part.get_payload(decode=True) or b''
-                if len(payload) > MAX_ATTACHMENT: raise ValueError('Attachment exceeds 3 MB download limit')
-                return {'name': part.get_filename() or 'attachment', 'data': base64.b64encode(payload).decode()}
-        raise Denied('Attachment unavailable')
+        return attachment(raw, int(tail[3]))
     raise ValueError('Unknown endpoint')
+
+
+def attachment(raw, wanted):
+    for index, part in enumerate(message_from_bytes(raw, policy=default).walk()):
+        if index == wanted and (part.get_filename() or part.get_content_disposition() == 'attachment'):
+            payload = part.get_payload(decode=True) or b''
+            if len(payload) > MAX_ATTACHMENT: raise ValueError('Attachment exceeds 3 MB download limit')
+            return {'name': part.get_filename() or 'attachment', 'data': base64.b64encode(payload).decode()}
+    raise Denied('Attachment unavailable')
 
 
 def api(event, context):
