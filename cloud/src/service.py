@@ -386,7 +386,7 @@ def dispatch(table, s3, ses, subject, method, path, data, query):
     raise ValueError('Unknown endpoint')
 
 
-def list_messages(table, s3, pk, query, unread=False):
+def list_messages(table, s3, pk, query, unread=False, untriaged=False):
     folder = query.get('folder', 'Inbox')
     if folder not in FOLDERS and folder != 'All': raise ValueError('Invalid folder')
     kwargs = {'KeyConditionExpression': Key('pk').eq(pk), 'IndexName': 'Chronological',
@@ -406,6 +406,7 @@ def list_messages(table, s3, pk, query, unread=False):
     for row in page['Items']:
         if folder != 'All' and row['folder'] != folder: continue
         if unread and row.get('seen'): continue
+        if untriaged and row.get('triage'): continue
         matches = needle in row.get('search', '')
         if needle and not matches and not row.get('quarantined'):
             # Search past the small DynamoDB preview index. Never silently

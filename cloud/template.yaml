@@ -215,8 +215,9 @@ Resources:
           AUTH_URL: !Sub 'https://${AuthDomain}.auth.${AWS::Region}.amazoncognito.com'
       Events:
         Page: {Type: HttpApi, Properties: {ApiId: !Ref HttpApi, Path: '/ui/{proxy+}', Method: GET, Auth: {Authorizer: NONE}}}
-  # Read-only robot reader. Its own API, authorizer and Lambda role, so the
-  # owner/employee API above is untouched and AWS refuses any write it attempts.
+  # Robot reader for headless triage. Its own API, authorizer and Lambda role, so
+  # the owner/employee API above is untouched. The role has no SES and no delete,
+  # writes only mail rows (never META/ADMIN records) and uploads only drafts.
   ReaderScopes:
     Type: AWS::Cognito::UserPoolResourceServer
     Condition: ReaderOn
@@ -224,7 +225,9 @@ Resources:
       UserPoolId: !Ref Pool
       Identifier: mail-reader
       Name: Mail reader
-      Scopes: [{ScopeName: read, ScopeDescription: Read mail in unassigned and named mailboxes}]
+      Scopes:
+        - {ScopeName: read, ScopeDescription: Read mail in unassigned and named mailboxes}
+        - {ScopeName: triage, ScopeDescription: 'Move between Inbox and Junk, tag, save review drafts; never send'}
   ReaderClient:
     Type: AWS::Cognito::UserPoolClient
     Condition: ReaderOn
@@ -235,7 +238,7 @@ Resources:
       GenerateSecret: true
       AllowedOAuthFlowsUserPoolClient: true
       AllowedOAuthFlows: [client_credentials]
-      AllowedOAuthScopes: [mail-reader/read]
+      AllowedOAuthScopes: [mail-reader/read, mail-reader/triage]
       SupportedIdentityProviders: [COGNITO]
       AccessTokenValidity: 60
       TokenValidityUnits: {AccessToken: minutes}
@@ -265,11 +268,34 @@ Resources:
       Environment:
         Variables: {READER_CLIENT_ID: !Ref ReaderClient, READER_MAILBOXES: !Ref ReaderMailboxes}
       Policies:
-        - DynamoDBReadPolicy: {TableName: !Ref MailTable}
-        - S3ReadPolicy: {BucketName: !Ref MailBucket}
+        - Statement:
+            - Effect: Allow
+              Action: [dynamodb:GetItem, dynamodb:Query]
+              Resource: [!GetAtt MailTable.Arn, !Sub '${MailTable.Arn}/index/*']
+            # Mail rows only: partition keys are mailbox#generation. META, ADMIN
+            # and RECEIPT records stay out of reach. No DeleteItem.
+            - Effect: Allow
+              Action: [dynamodb:PutItem, dynamodb:UpdateItem]
+              Resource: !GetAtt MailTable.Arn
+              Condition:
+                ForAllValues:StringLike:
+                  dynamodb:LeadingKeys: ['one#*', 'two#*', 'three#*', 'four#*', 'five#*']
+            - Effect: Allow
+              Action: s3:GetObject
+              Resource: !Sub '${MailBucket.Arn}/*'
+            - Effect: Allow
+              Action: s3:PutObject
+              Resource: !Sub '${MailBucket.Arn}/drafts/*'
       Events:
         Root: {Type: HttpApi, Properties: {ApiId: !Ref ReaderHttpApi, Path: /reader/mailboxes, Method: GET}}
         Mail: {Type: HttpApi, Properties: {ApiId: !Ref ReaderHttpApi, Path: '/reader/mailboxes/{proxy+}', Method: GET}}
+        Triage:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref ReaderHttpApi
+            Path: '/reader/mailboxes/{proxy+}'
+            Method: POST
+            Auth: {Authorizer: Reader, AuthorizationScopes: [mail-reader/triage]}
   ReaderLogs:
     Type: AWS::Logs::LogGroup
     Condition: ReaderOn

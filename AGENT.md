@@ -283,10 +283,13 @@ count, without the password.
 For the AWS mailboxes (one to five at extraliferecords.com), set
 `SIMPLEMAIL_CLOUD_API_URL`, `SIMPLEMAIL_CLOUD_AUTH_URL` and
 `SIMPLEMAIL_CLOUD_CLIENT_ID` instead. The same server then uses the read-only robot
-reader (`cloud_reader.py`): `mailbox_list`, `mailbox_unread` (every mailbox at
-once, or one), `mailbox_search`, `mailbox_read` and `mailbox_attachment`. The reader
-client secret belongs in a network secret, not an environment variable. See
-`cloud/README.md`, "Robot reader".
+reader (`cloud_reader.py`): `mailbox_list`, `mailbox_unread` and
+`mailbox_untriaged` (every mailbox at once, or one), `mailbox_search`,
+`mailbox_read`, `mailbox_attachment`, plus triage: `mailbox_tag` (important,
+scam, needs_fix, reply or fyi, with a one-line note), `mailbox_move` (Inbox or Junk
+only) and `mailbox_draft` (a new review draft, never sent). It cannot send, delete or
+mark mail read. The reader client secret belongs in a network secret, not an
+environment variable. See `cloud/README.md`, "Robot reader".
 
 ## Verification
 

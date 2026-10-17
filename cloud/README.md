@@ -187,20 +187,33 @@ them as Member/Premium. They handle verification and terms. Owner plus four empl
 fills five seats; the fifth email may remain reserved. Invitations expire after
 21 days. Never transfer an old employee's Claude account or history.
 
-## Robot reader (read-only access for headless owner tools)
+## Robot reader (headless triage for the owner)
 
 Off by default (`ReaderEnabled=false`). When on, it adds a Cognito machine app client
-(`client_credentials`, scope `mail-reader/read`, one-hour tokens), a **separate** HTTP API
-with its own JWT authorizer, and `ReaderFunction` (`src/reader.py`), whose role has
-DynamoDB and S3 **read only** and no SES. The owner/employee API, its authorizer and
-the desktop client are unchanged.
+(`client_credentials`, scopes `mail-reader/read` and `mail-reader/triage`, one-hour tokens),
+a **separate** HTTP API with its own JWT authorizer, and `ReaderFunction` (`src/reader.py`).
+The owner/employee API, its authorizer and the desktop client are unchanged.
+
+`ReaderFunction`'s role has **no SES and no delete**. It reads the table and bucket, writes
+(`PutItem`/`UpdateItem`) only rows whose partition key is `<mailbox>#<generation>`, so META,
+ADMIN and RECEIPT records are out of reach, and uploads only under `drafts/`. Whatever
+the code does, the robot can never send mail, delete it or change an assignment.
 
 The reader sees Reserved (unassigned) mailboxes, plus Assigned ones listed in
 `ReaderMailboxes` (e.g. `two,three`). Disabled mailboxes are never visible. Assigning an
-employee removes their inbox from the reader on the next request. It can list,
-search, read and download attachments (3 MB). It cannot send, draft, move, flag or delete,
-and reading never marks mail as read. Each request logs one line with the endpoint kind, mailbox and
-status, never IDs, queries or content (90-day retention).
+employee removes their inbox from the reader on the next request.
+
+- `mail-reader/read` (GET): list, search (`q`), unread (`unread=1`), not-yet-triaged
+  (`untriaged=1`), read and download attachments (3 MB).
+- `mail-reader/triage` (POST, enforced by the gateway and again in code):
+  `messages/<id>/move` between Inbox and Junk only, with a reason recorded in `moved_by`;
+  `messages/<id>/triage` stores `{category, note, at}` (important, scam, needs_fix, reply or fyi);
+  `drafts` creates a **new** review draft (no BCC, no attachments), marked `author: robot`
+  with its reason and `reply_to_id`. The same `request_id` always maps to the same draft, so retries
+  never duplicate it. The robot never edits an existing draft or changes read state.
+
+Each request logs one line with the action, mailbox and status, never IDs, queries,
+recipients or content (90-day retention).
 
 Deploy (owner, with an AWS operator profile). Pass the **complete** live parameter set: a missed
 `CallbackUrl` would fall back to its default and change `Client`'s callback URLs.

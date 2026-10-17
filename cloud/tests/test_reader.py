@@ -39,8 +39,14 @@ class ReaderTests(unittest.TestCase):
         notification = {'mail': {'timestamp': '2026-10-07T00:00:00Z'}, 'receipt': {'action': {'bucketName': 'mail-testing', 'objectKey': key}, 'recipients': ['one@inbox.playloudr.com'], 'spamVerdict': {'status': 'PASS'}, 'virusVerdict': {'status': virus}}}
         service.receive({'Records': [{'Sns': {'Message': json.dumps(notification)}}]}, None)
 
-    def call(self, path='/reader/mailboxes/one/messages', method='GET', query=None):
-        return reader.dispatch(self.table, self.s3, method, path, query or {})
+    def call(self, path='/reader/mailboxes/one/messages', method='GET', query=None, data=None, scopes=(reader.READ,)):
+        return reader.dispatch(self.table, self.s3, method, path, query or {}, data, scopes)
+
+    def post(self, path, **data):
+        return self.call(path, 'POST', data=data, scopes=(reader.READ, reader.TRIAGE))
+
+    def row(self, mid, pk='one#first'):
+        return self.table.get_item(Key={'pk': pk, 'sk': 'MSG#' + mid})['Item']
 
     def assign(self, name, state='Assigned'):
         self.table.put_item(Item={'pk': name, 'sk': 'META', 'generation': 'second', 'state': state, 'subject': 'employee'})
@@ -90,17 +96,80 @@ class ReaderTests(unittest.TestCase):
         self.deliver(virus='FAIL'); rows = self.call(query={'folder': 'Junk'})['messages']
         with self.assertRaises(service.Denied): self.call('/reader/mailboxes/one/messages/' + rows[0]['id'])
 
-    def test_every_write_is_refused(self):
+    def test_read_scope_alone_cannot_change_anything(self):
         self.deliver(); mid = self.call()['messages'][0]['id']
-        for method, path in (('POST', '/reader/mailboxes/one/send'), ('POST', '/reader/mailboxes/one/drafts'),
-                             ('PATCH', f'/reader/mailboxes/one/messages/{mid}'),
+        for path in ('/reader/mailboxes/one/drafts', f'/reader/mailboxes/one/messages/{mid}/move',
+                     f'/reader/mailboxes/one/messages/{mid}/triage'):
+            with self.assertRaises(service.Denied): self.call(path, 'POST', data={'folder': 'Junk'})
+        row = self.row(mid); self.assertEqual((row['folder'], 'triage' in row), ('Inbox', False))
+
+    def test_triage_scope_still_cannot_send_delete_or_mark_read(self):
+        self.deliver(); mid = self.call()['messages'][0]['id']
+        both = (reader.READ, reader.TRIAGE)
+        for method, path in (('PATCH', f'/reader/mailboxes/one/messages/{mid}'),
                              ('DELETE', f'/reader/mailboxes/one/messages/{mid}'), ('PUT', '/reader/mailboxes')):
-            with self.assertRaises(service.Denied): self.call(path, method)
+            with self.assertRaises(service.Denied): self.call(path, method, data={'folder': 'Trash', 'seen': True}, scopes=both)
+        for path in ('/reader/mailboxes/one/send', f'/reader/mailboxes/one/messages/{mid}', '/reader/mailboxes',
+                     f'/reader/mailboxes/one/messages/{mid}/seen'):
+            with self.assertRaises((ValueError, service.Denied)):
+                self.call(path, 'POST', data={'to': 'a@example.com', 'body': 'x', 'seen': True}, scopes=both)
+        with self.assertRaises(ValueError): self.post(f'/reader/mailboxes/one/messages/{mid}/move', folder='Trash', reason='tidy')
+        row = self.row(mid); self.assertEqual((row['folder'], row['seen']), ('Inbox', False))
         for path in ('/reader/mailboxes/one/send', '/reader/mailboxes/one/drafts', '/reader/mailboxes/one/sends/request-123456789',
                      '/mailboxes/one/messages', '/reader/other'):
             with self.assertRaises((ValueError, service.Denied)): self.call(path)
         row = self.table.get_item(Key={'pk': 'one#first', 'sk': 'MSG#' + mid})['Item']
         self.assertEqual((row['folder'], row['seen']), ('Inbox', False))
+
+    def test_scam_moves_to_junk_and_back_with_reason(self):
+        self.deliver(); mid = self.call()['messages'][0]['id']
+        with self.assertRaises(ValueError): self.post(f'/reader/mailboxes/one/messages/{mid}/move', folder='Junk')
+        self.post(f'/reader/mailboxes/one/messages/{mid}/move', folder='Junk', reason='Fake invoice')
+        row = self.row(mid)
+        self.assertEqual((row['folder'], row['seen'], row['moved_by']['from'], row['moved_by']['reason']),
+                         ('Junk', False, 'Inbox', 'Fake invoice'))
+        self.assertEqual(self.call()['messages'], [])
+        self.post(f'/reader/mailboxes/one/messages/{mid}/move', folder='Inbox', reason='Not a scam')
+        self.assertEqual(self.row(mid)['folder'], 'Inbox')
+
+    def test_robot_cannot_move_trash_or_drafts(self):
+        self.deliver(); mid = self.call()['messages'][0]['id']
+        self.table.update_item(Key={'pk': 'one#first', 'sk': 'MSG#' + mid}, UpdateExpression='SET folder=:f',
+                               ExpressionAttributeValues={':f': 'Trash'})
+        with self.assertRaises(service.Denied): self.post(f'/reader/mailboxes/one/messages/{mid}/move', folder='Inbox', reason='restore')
+        made = self.post('/reader/mailboxes/one/drafts', to='a@example.com', subject='Hi', body='Hello', reason='Reply',
+                         request_id='request-0000000001')
+        with self.assertRaises(service.Denied): self.post(f"/reader/mailboxes/one/messages/{made['id']}/move", folder='Junk', reason='x')
+
+    def test_tag_and_untriaged_listing(self):
+        self.deliver('incoming/a'); self.deliver('incoming/b', 'Second')
+        rows = self.call(query={'untriaged': '1'})['messages']; self.assertEqual(len(rows), 2)
+        first = f"/reader/mailboxes/one/messages/{rows[0]['id']}/triage"
+        with self.assertRaises(ValueError): self.post(first, category='urgent', note='x')
+        with self.assertRaises(ValueError): self.post(first, category='important', note='')
+        self.post(first, category='important', note='Label wants the masters by Friday')
+        self.assertEqual([r['id'] for r in self.call(query={'untriaged': '1'})['messages']], [rows[1]['id']])
+        tagged = next(r for r in self.call()['messages'] if r['id'] == rows[0]['id'])
+        self.assertEqual(tagged['triage']['category'], 'important')
+        self.assertFalse(self.row(rows[0]['id'])['seen'])
+
+    def test_robot_draft_is_a_review_draft_and_retry_safe(self):
+        self.deliver(); mid = self.call()['messages'][0]['id']
+        data = dict(to='fan@example.com', subject='Re: Private subject', body='Thanks!', reason='Simple thank-you',
+                    request_id='triage-2026-10-17-one-1', reply_to_id=mid)
+        first = self.post('/reader/mailboxes/one/drafts', **data)
+        again = self.post('/reader/mailboxes/one/drafts', **{**data, 'body': 'Changed on retry'})
+        self.assertEqual((again['id'], again.get('existing')), (first['id'], True))
+        drafts = self.call(query={'folder': 'Drafts'})['messages']
+        self.assertEqual(len(drafts), 1)
+        self.assertEqual((drafts[0]['author'], drafts[0]['reply_to_id'], drafts[0]['reason']), ('robot', mid, 'Simple thank-you'))
+        self.assertEqual(self.call(f"/reader/mailboxes/one/messages/{first['id']}")['draft']['body'], 'Thanks!')
+        for bad in ({'bcc': 'x@example.com'}, {'attachments': [{'name': 'a', 'data': ''}]}, {'reason': ''},
+                    {'request_id': 'short'}, {'to': ''}, {'to': 'not an address'}, {'reply_to_id': 'missing'}):
+            with self.assertRaises((ValueError, service.Denied)):
+                self.post('/reader/mailboxes/one/drafts', **{**data, 'request_id': 'triage-2026-10-17-one-2', **bad})
+        self.assertEqual(len(self.call(query={'folder': 'Drafts'})['messages']), 1)
+        self.assertEqual(self.s3.list_objects_v2(Bucket='mail-testing', Prefix='sent/').get('KeyCount', 0), 0)
 
     def test_only_the_reader_machine_token_is_accepted(self):
         for claims in (self.claims(client_id='desktopclient'), self.claims(scope='openid email'),
@@ -108,7 +177,19 @@ class ReaderTests(unittest.TestCase):
             with redirect_stdout(io.StringIO()):
                 self.assertEqual(reader.api(self.event(claims), None)['statusCode'], 403)
         with redirect_stdout(io.StringIO()):
-            self.assertEqual(reader.api(self.event(self.claims(), method='POST'), None)['statusCode'], 403)
+            self.assertEqual(reader.api(self.event(self.claims(), '/reader/mailboxes/one/drafts', 'POST'), None)['statusCode'], 403)
+            self.assertEqual(reader.api(self.event(self.claims(scope='mail-reader/triage'), '/reader/mailboxes'), None)['statusCode'], 403)
+
+    def test_api_tags_with_triage_scope_and_logs_no_content(self):
+        self.deliver(); mid = self.call()['messages'][0]['id']
+        event = self.event(self.claims(scope='mail-reader/read mail-reader/triage'),
+                           f'/reader/mailboxes/one/messages/{mid}/triage', 'POST')
+        event['body'] = json.dumps({'category': 'scam', 'note': 'Private subject looks fake'})
+        log = io.StringIO()
+        with redirect_stdout(log):
+            response = reader.api(event, None)
+        self.assertEqual(response['statusCode'], 200)
+        self.assertEqual(json.loads(log.getvalue()), {'reader': 'triage', 'mailbox': 'one', 'status': 200})
 
     def test_api_returns_mail_and_audit_log_has_no_content(self):
         self.deliver(); mid = self.call()['messages'][0]['id']

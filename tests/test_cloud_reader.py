@@ -34,7 +34,8 @@ class FakeOpener:
         if url.path == "/oauth2/token":
             return Response(json.dumps({"access_token": "token-1", "expires_in": 3600}).encode())
         query = parse_qs(url.query)
-        key = url.path + ("?unread" if query.get("unread") else "")
+        key = request.get_method() + " " + url.path + ("?unread" if query.get("unread") else "") + \
+            ("?untriaged" if query.get("untriaged") else "")
         value = self.pages[key]
         if isinstance(value, int):
             raise HTTPError(request.full_url, value, "denied", {}, io.BytesIO(b'{"error": "Mailbox is not available"}'))
@@ -42,14 +43,19 @@ class FakeOpener:
 
 
 PAGES = {
-    "/reader/mailboxes": {"mailboxes": [{"name": "one", "address": "one@extraliferecords.com", "state": "Reserved"},
+    "POST /reader/mailboxes/one/messages/m1/triage": {"ok": True},
+    "POST /reader/mailboxes/one/messages/m1/move": {"ok": True, "folder": "Junk"},
+    "POST /reader/mailboxes/one/drafts": {"id": "d1", "revision": "r1"},
+    "GET /reader/mailboxes/one/messages?untriaged": {"messages": [{"id": "m1"}], "cursor": None},
+    "GET /reader/mailboxes/five/messages?untriaged": {"messages": [], "cursor": None},
+    "GET /reader/mailboxes": {"mailboxes": [{"name": "one", "address": "one@extraliferecords.com", "state": "Reserved"},
                                         {"name": "five", "address": "five@extraliferecords.com", "state": "Reserved"}]},
-    "/reader/mailboxes/one/messages?unread": {"messages": [{"id": "m1", "subject": "Hi", "seen": False}], "cursor": "c1"},
-    "/reader/mailboxes/five/messages?unread": {"messages": [], "cursor": None},
-    "/reader/mailboxes/one/messages": {"messages": [{"id": "m1"}], "cursor": None},
-    "/reader/mailboxes/one/messages/m1": {"id": "m1", "subject": "Hi", "body": "x" * 500, "html": "<p>x</p>",
+    "GET /reader/mailboxes/one/messages?unread": {"messages": [{"id": "m1", "subject": "Hi", "seen": False}], "cursor": "c1"},
+    "GET /reader/mailboxes/five/messages?unread": {"messages": [], "cursor": None},
+    "GET /reader/mailboxes/one/messages": {"messages": [{"id": "m1"}], "cursor": None},
+    "GET /reader/mailboxes/one/messages/m1": {"id": "m1", "subject": "Hi", "body": "x" * 500, "html": "<p>x</p>",
                                           "body_truncated": False},
-    "/reader/mailboxes/two/messages/m1": 403,
+    "GET /reader/mailboxes/two/messages/m1": 403,
 }
 
 
@@ -81,7 +87,8 @@ class CloudReaderTests(unittest.TestCase):
         self.assertEqual(len(token_requests), 1)
         self.assertIsNone(token_requests[0].get_header("Authorization"))
         self.assertEqual(parse_qs(token_requests[0].data.decode()),
-                         {"grant_type": ["client_credentials"], "client_id": ["readerclient123"], "scope": ["mail-reader/read"]})
+                         {"grant_type": ["client_credentials"], "client_id": ["readerclient123"],
+                          "scope": ["mail-reader/read mail-reader/triage"]})
         self.assertEqual(self.opener.requests[-1].get_header("Authorization"), "Bearer token-1")
 
     def test_local_secret_uses_basic_auth(self):
@@ -92,8 +99,9 @@ class CloudReaderTests(unittest.TestCase):
     def test_only_read_tools_exist(self):
         self.assertEqual(self.init["result"]["serverInfo"]["name"], "simplemail-aws-reader")
         names = {item["name"] for item in self.call({"jsonrpc": "2.0", "id": 2, "method": "tools/list"})["result"]["tools"]}
-        self.assertEqual(names, {"mailbox_list", "mailbox_unread", "mailbox_search", "mailbox_read", "mailbox_attachment"})
-        for blocked in ("mailbox_send", "mailbox_draft", "mailbox_file", "mailbox_identity"):
+        self.assertEqual(names, {"mailbox_list", "mailbox_unread", "mailbox_search", "mailbox_read", "mailbox_attachment",
+                                 "mailbox_untriaged", "mailbox_tag", "mailbox_move", "mailbox_draft"})
+        for blocked in ("mailbox_send", "mailbox_file", "mailbox_identity", "mailbox_delete"):
             self.assertEqual(self.tool(blocked)["error"]["code"], -32602)
         self.assertEqual(self.opener.requests, [])
 
@@ -122,6 +130,32 @@ class CloudReaderTests(unittest.TestCase):
         self.assertTrue(result["isError"])
         self.assertIn("403", result["content"][0]["text"])
         self.assertNotIn("token-1", json.dumps(result))
+
+    def body(self):
+        request = self.opener.requests[-1]
+        return request.get_method(), urlsplit(request.full_url).path, json.loads(request.data)
+
+    def test_untriaged_across_every_mailbox(self):
+        result = self.tool("mailbox_untriaged")["result"]["structuredContent"]
+        self.assertEqual([(box["mailbox"], len(box["items"])) for box in result["mailboxes"]], [("one", 1), ("five", 0)])
+
+    def test_tag_move_and_draft_send_the_right_requests(self):
+        self.assertFalse(self.tool("mailbox_tag", mailbox="one", message_id="m1", category="scam", note="Fake invoice")["result"]["isError"])
+        self.assertEqual(self.body(), ("POST", "/reader/mailboxes/one/messages/m1/triage", {"category": "scam", "note": "Fake invoice"}))
+        self.tool("mailbox_move", mailbox="one", message_id="m1", folder="Junk", reason="Fake invoice")
+        self.assertEqual(self.body(), ("POST", "/reader/mailboxes/one/messages/m1/move", {"folder": "Junk", "reason": "Fake invoice"}))
+        self.tool("mailbox_draft", mailbox="one", to="fan@example.com", subject="Re: Hi", body="Thanks!",
+                  reason="Thank-you", request_id="triage-2026-10-17-1", reply_to_id="m1")
+        method, path, data = self.body()
+        self.assertEqual((method, path, data["reply_to_id"], data["request_id"]), ("POST", "/reader/mailboxes/one/drafts", "m1", "triage-2026-10-17-1"))
+
+    def test_bad_tag_or_move_never_reaches_the_service(self):
+        before = len(self.opener.requests)
+        self.assertTrue(self.tool("mailbox_tag", mailbox="one", message_id="m1", category="urgent", note="x")["result"]["isError"])
+        self.assertTrue(self.tool("mailbox_move", mailbox="one", message_id="m1", folder="Trash", reason="x")["result"]["isError"])
+        self.assertTrue(self.tool("mailbox_draft", mailbox="one", to="a@example.com", subject="s", body="b", reason="r",
+                                  request_id="triage-2026-10-17-1", reply_to_id="../m1")["result"]["isError"])
+        self.assertEqual(len(self.opener.requests), before)
 
     def test_cli_uses_cloud_mode_when_configured(self):
         with patch.dict(os.environ, {**ENV, "SIMPLEMAIL_CLOUD_API_URL": "https://bad.example.com"}, clear=True):
