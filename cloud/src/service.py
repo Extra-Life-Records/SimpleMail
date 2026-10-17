@@ -347,37 +347,7 @@ def dispatch(table, s3, ses, subject, method, path, data, query):
         if not re.fullmatch(r'[a-zA-Z0-9_-]{16,80}', tail[1]): raise ValueError('Invalid send ID')
         row = table.get_item(Key={'pk': pk, 'sk': 'SEND#' + tail[1]}, ConsistentRead=True).get('Item')
         return public(row) if row else {'status': 'not_started'}
-    if tail == ['messages'] and method == 'GET':
-        folder = query.get('folder', 'Inbox')
-        if folder not in FOLDERS and folder != 'All': raise ValueError('Invalid folder')
-        kwargs = {'KeyConditionExpression': Key('pk').eq(pk), 'IndexName': 'Chronological',
-                  'ScanIndexForward': False, 'Limit': 10}
-        cursor = query.get('cursor')
-        if cursor:
-            # Cursor cannot choose another partition or arbitrary DynamoDB key.
-            try:
-                decoded = json.loads(base64.urlsafe_b64decode(cursor))
-                if not re.fullmatch(r'MSG#[a-zA-Z0-9_-]{1,100}', decoded['sk']) or len(decoded['received']) > 40:
-                    raise ValueError('Invalid cursor')
-                kwargs['ExclusiveStartKey'] = {'pk': pk, 'sk': decoded['sk'], 'received': decoded['received']}
-            except Exception: raise ValueError('Invalid cursor') from None
-        page = table.query(**kwargs)
-        needle = query.get('q', '').casefold()[:1000]
-        rows = []
-        for row in page['Items']:
-            if folder != 'All' and row['folder'] != folder: continue
-            matches = needle in row.get('search', '')
-            if needle and not matches and not row.get('quarantined'):
-                # Search past the small DynamoDB preview index. Never silently
-                # exclude long bodies; attachment binary contents are not searched.
-                raw = read_raw(s3, row)
-                content = json.loads(raw) if row.get('kind') == 'draft' else parse(raw, maximum=None)
-                matches = needle in '\n'.join(str(content.get(k, '')) for k in
-                                              ('subject', 'sender', 'to', 'cc', 'body')).casefold()
-            if matches: rows.append(public(row))
-        next_key = page.get('LastEvaluatedKey')
-        next_cursor = base64.urlsafe_b64encode(json.dumps({'sk': next_key['sk'], 'received': next_key['received']}).encode()).decode() if next_key else None
-        return {'messages': rows, 'cursor': next_cursor}
+    if tail == ['messages'] and method == 'GET': return list_messages(table, s3, pk, query)
     if tail == ['send'] and method == 'POST': return send(table, s3, ses, item, subject, data)
     if tail == ['drafts'] and method == 'POST':
         draft = validate_draft(data)
@@ -412,19 +382,59 @@ def dispatch(table, s3, ses, subject, method, path, data, query):
             table.update_item(Key={'pk': pk, 'sk': row['sk']}, UpdateExpression='SET folder=:f, seen=:s',
                               ExpressionAttributeValues={':f': folder, ':s': seen})
             return {'ok': True}
-        if method == 'GET':
-            if row.get('quarantined'): raise Denied('Message quarantined: virus scan did not pass')
+        if method == 'GET': return read_message(s3, row, tail)
+    raise ValueError('Unknown endpoint')
+
+
+def list_messages(table, s3, pk, query, unread=False, untriaged=False):
+    folder = query.get('folder', 'Inbox')
+    if folder not in FOLDERS and folder != 'All': raise ValueError('Invalid folder')
+    kwargs = {'KeyConditionExpression': Key('pk').eq(pk), 'IndexName': 'Chronological',
+              'ScanIndexForward': False, 'Limit': 10}
+    cursor = query.get('cursor')
+    if cursor:
+        # Cursor cannot choose another partition or arbitrary DynamoDB key.
+        try:
+            decoded = json.loads(base64.urlsafe_b64decode(cursor))
+            if not re.fullmatch(r'MSG#[a-zA-Z0-9_-]{1,100}', decoded['sk']) or len(decoded['received']) > 40:
+                raise ValueError('Invalid cursor')
+            kwargs['ExclusiveStartKey'] = {'pk': pk, 'sk': decoded['sk'], 'received': decoded['received']}
+        except Exception: raise ValueError('Invalid cursor') from None
+    page = table.query(**kwargs)
+    needle = query.get('q', '').casefold()[:1000]
+    rows = []
+    for row in page['Items']:
+        if folder != 'All' and row['folder'] != folder: continue
+        if unread and row.get('seen'): continue
+        if untriaged and row.get('triage'): continue
+        matches = needle in row.get('search', '')
+        if needle and not matches and not row.get('quarantined'):
+            # Search past the small DynamoDB preview index. Never silently
+            # exclude long bodies; attachment binary contents are not searched.
             raw = read_raw(s3, row)
-            if len(tail) == 2:
-                if row.get('kind') == 'draft': return {**public(row), 'draft': json.loads(raw)}
-                return {**public(row), **parse(raw)}
-            if len(tail) == 4 and tail[2] == 'attachments' and tail[3].isdigit():
-                for index, part in enumerate(message_from_bytes(raw, policy=default).walk()):
-                    if index == int(tail[3]) and (part.get_filename() or part.get_content_disposition() == 'attachment'):
-                        payload = part.get_payload(decode=True) or b''
-                        if len(payload) > MAX_ATTACHMENT: raise ValueError('Attachment exceeds 3 MB download limit')
-                        return {'name': part.get_filename() or 'attachment', 'data': base64.b64encode(payload).decode()}
-                raise Denied('Attachment unavailable')
+            content = json.loads(raw) if row.get('kind') == 'draft' else parse(raw, maximum=None)
+            matches = needle in '\n'.join(str(content.get(k, '')) for k in
+                                          ('subject', 'sender', 'to', 'cc', 'body')).casefold()
+        if matches: rows.append(public(row))
+    next_key = page.get('LastEvaluatedKey')
+    next_cursor = base64.urlsafe_b64encode(json.dumps({'sk': next_key['sk'], 'received': next_key['received']}).encode()).decode() if next_key else None
+    return {'messages': rows, 'cursor': next_cursor}
+
+
+def read_message(s3, row, tail):
+    """GET one message (tail = messages/<id>) or attachment (messages/<id>/attachments/<n>)."""
+    if row.get('quarantined'): raise Denied('Message quarantined: virus scan did not pass')
+    raw = read_raw(s3, row)
+    if len(tail) == 2:
+        if row.get('kind') == 'draft': return {**public(row), 'draft': json.loads(raw)}
+        return {**public(row), **parse(raw)}
+    if len(tail) == 4 and tail[2] == 'attachments' and tail[3].isdigit():
+        for index, part in enumerate(message_from_bytes(raw, policy=default).walk()):
+            if index == int(tail[3]) and (part.get_filename() or part.get_content_disposition() == 'attachment'):
+                payload = part.get_payload(decode=True) or b''
+                if len(payload) > MAX_ATTACHMENT: raise ValueError('Attachment exceeds 3 MB download limit')
+                return {'name': part.get_filename() or 'attachment', 'data': base64.b64encode(payload).decode()}
+        raise Denied('Attachment unavailable')
     raise ValueError('Unknown endpoint')
 
 

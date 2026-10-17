@@ -32,6 +32,16 @@ Parameters:
     Type: String
     Default: http://localhost:8765/callback
     Description: Set to the WebInbox output after first deployment; desktop callback retained.
+  ReaderEnabled:
+    Type: String
+    Default: 'false'
+    AllowedValues: ['true', 'false']
+    Description: Create the read-only robot reader (machine app client, separate API, read-only Lambda).
+  ReaderMailboxes:
+    Type: String
+    Default: ''
+    AllowedPattern: '^[a-z,]*$'
+    Description: Assigned mailboxes the reader may also read, comma separated (e.g. two,three). Unassigned ones are always readable.
 Globals:
   Function:
     Runtime: python3.12
@@ -49,6 +59,7 @@ Conditions:
   ReserveApiCapacity: !Not [!Equals [!Ref ApiReservedConcurrency, 0]]
   WebCallbackConfigured: !Not [!Equals [!Ref CallbackUrl, 'http://localhost:8765/callback']]
   NewSendingIdentity: !Equals [!Ref CreateSendingIdentity, 'true']
+  ReaderOn: !Equals [!Ref ReaderEnabled, 'true']
 Resources:
   MailBucket:
     Type: AWS::S3::Bucket
@@ -204,6 +215,99 @@ Resources:
           AUTH_URL: !Sub 'https://${AuthDomain}.auth.${AWS::Region}.amazoncognito.com'
       Events:
         Page: {Type: HttpApi, Properties: {ApiId: !Ref HttpApi, Path: '/ui/{proxy+}', Method: GET, Auth: {Authorizer: NONE}}}
+  # Robot reader for headless triage. Its own API, authorizer and Lambda role, so
+  # the owner/employee API above is untouched. The role has no SES and no delete,
+  # writes only mail rows (never META/ADMIN records) and uploads only drafts.
+  ReaderScopes:
+    Type: AWS::Cognito::UserPoolResourceServer
+    Condition: ReaderOn
+    Properties:
+      UserPoolId: !Ref Pool
+      Identifier: mail-reader
+      Name: Mail reader
+      Scopes:
+        - {ScopeName: read, ScopeDescription: Read mail in unassigned and named mailboxes}
+        - {ScopeName: triage, ScopeDescription: 'Move between Inbox and Junk, tag, save review drafts; never send'}
+  ReaderClient:
+    Type: AWS::Cognito::UserPoolClient
+    Condition: ReaderOn
+    DependsOn: ReaderScopes
+    Properties:
+      UserPoolId: !Ref Pool
+      ClientName: mail-reader
+      GenerateSecret: true
+      AllowedOAuthFlowsUserPoolClient: true
+      AllowedOAuthFlows: [client_credentials]
+      AllowedOAuthScopes: [mail-reader/read, mail-reader/triage]
+      # Machine client only: no password or SRP sign-in for a person.
+      ExplicitAuthFlows: [ALLOW_REFRESH_TOKEN_AUTH]
+      SupportedIdentityProviders: [COGNITO]
+      AccessTokenValidity: 60
+      TokenValidityUnits: {AccessToken: minutes}
+      EnableTokenRevocation: true
+      PreventUserExistenceErrors: ENABLED
+  ReaderHttpApi:
+    Type: AWS::Serverless::HttpApi
+    Condition: ReaderOn
+    Properties:
+      StageName: '$default'
+      DefaultRouteSettings: {ThrottlingBurstLimit: 10, ThrottlingRateLimit: 5}
+      Auth:
+        Authorizers:
+          Reader:
+            JwtConfiguration:
+              issuer: !Sub 'https://cognito-idp.${AWS::Region}.amazonaws.com/${Pool}'
+              audience: [!Ref ReaderClient]
+            IdentitySource: '$request.header.Authorization'
+            AuthorizationScopes: [mail-reader/read]
+        DefaultAuthorizer: Reader
+  ReaderFunction:
+    Type: AWS::Serverless::Function
+    Condition: ReaderOn
+    Properties:
+      Handler: reader.api
+      MemorySize: 512
+      Environment:
+        Variables: {READER_CLIENT_ID: !Ref ReaderClient, READER_MAILBOXES: !Ref ReaderMailboxes}
+      Policies:
+        - Statement:
+            # Mailbox META rows and mail rows only; ADMIN and RECEIPT stay unreadable.
+            - Effect: Allow
+              Action: [dynamodb:GetItem, dynamodb:Query]
+              Resource: [!GetAtt MailTable.Arn, !Sub '${MailTable.Arn}/index/*']
+              Condition:
+                ForAllValues:StringLike:
+                  dynamodb:LeadingKeys: [one, two, three, four, five, 'one#*', 'two#*', 'three#*', 'four#*', 'five#*']
+            # Mail rows only: partition keys are mailbox#generation. META, ADMIN
+            # and RECEIPT records stay out of reach. No DeleteItem.
+            - Effect: Allow
+              Action: [dynamodb:PutItem, dynamodb:UpdateItem]
+              Resource: !GetAtt MailTable.Arn
+              Condition:
+                ForAllValues:StringLike:
+                  dynamodb:LeadingKeys: ['one#*', 'two#*', 'three#*', 'four#*', 'five#*']
+            - Effect: Allow
+              Action: s3:GetObject
+              Resource: !Sub '${MailBucket.Arn}/*'
+            - Effect: Allow
+              Action: s3:PutObject
+              Resource: !Sub '${MailBucket.Arn}/drafts/*'
+      Events:
+        Root: {Type: HttpApi, Properties: {ApiId: !Ref ReaderHttpApi, Path: /reader/mailboxes, Method: GET}}
+        Mail: {Type: HttpApi, Properties: {ApiId: !Ref ReaderHttpApi, Path: '/reader/mailboxes/{proxy+}', Method: GET}}
+        Triage:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref ReaderHttpApi
+            Path: '/reader/mailboxes/{proxy+}'
+            Method: POST
+            Auth: {Authorizer: Reader, AuthorizationScopes: [mail-reader/triage]}
+  ReaderLogs:
+    Type: AWS::Logs::LogGroup
+    Condition: ReaderOn
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties: {LogGroupName: !Sub '/aws/lambda/${ReaderFunction}', RetentionInDays: 90}
   ReceiveTopic:
     Type: AWS::SNS::Topic
   ReceiveTopicPolicy:
@@ -350,6 +454,12 @@ Outputs:
   ClientId: {Value: !Ref Client}
   AuthUrl: {Value: !Sub 'https://${AuthDomain}.auth.${AWS::Region}.amazoncognito.com'}
   RuleSet: {Value: !Ref Rules}
+  ReaderApiUrl:
+    Condition: ReaderOn
+    Value: !Sub 'https://${ReaderHttpApi}.execute-api.${AWS::Region}.amazonaws.com'
+  ReaderClientId:
+    Condition: ReaderOn
+    Value: !Ref ReaderClient
   ReceiveIdentity: {Value: !Ref ReceiveDomain}
   ReceivingDkim1: {Value: !Join [' -> ', [!GetAtt ReceiveIdentity.DkimDNSTokenName1, !GetAtt ReceiveIdentity.DkimDNSTokenValue1]]}
   ReceivingDkim2: {Value: !Join [' -> ', [!GetAtt ReceiveIdentity.DkimDNSTokenName2, !GetAtt ReceiveIdentity.DkimDNSTokenValue2]]}
