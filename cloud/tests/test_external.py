@@ -224,6 +224,18 @@ class ExternalTests(unittest.TestCase):
         self.imap = FakeIMAP()
         self.assertEqual(self.post('/reader/mailboxes/elr/drafts', **data)['id'], 'drafts-9-1')
 
+    def test_stuck_draft_claim_is_retaken_only_when_stale(self):
+        data = dict(to='a@example.com', subject='s', body='b', reason='r', request_id='triage-2026-10-17-elr-4')
+        key = {'pk': 'external#elr', 'sk': 'DRAFT#' + external.hashlib.sha256(data['request_id'].encode()).hexdigest()[:32]}
+        self.table.put_item(Item={**key, 'status': 'saving', 'created': service.timestamp()})
+        self.assertTrue(self.post('/reader/mailboxes/elr/drafts', **data)['existing'])
+        self.table.put_item(Item={**key, 'status': 'saving', 'created': '2026-10-01T00:00:00.000000Z'})
+        self.assertEqual(self.post('/reader/mailboxes/elr/drafts', **data)['id'], 'drafts-9-1')
+
+    def test_folder_names_sent_as_literals(self):
+        self.imap.list = lambda: ('OK', [b'(\\HasNoChildren) "/" "INBOX"', (b'(\\HasNoChildren \\Junk) "/" {9}', b'Junk Mail')])
+        self.assertEqual(external.folders(self.imap)['Junk'], 'Junk Mail')
+
     def test_read_scope_cannot_change_fasthosts_mail(self):
         a = self.imap.add('INBOX', mail(1))
         for path in ('/reader/mailboxes/elr/drafts', f'/reader/mailboxes/elr/messages/inbox-7-{a}/move'):

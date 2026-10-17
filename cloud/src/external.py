@@ -21,6 +21,7 @@ import json
 import os
 import re
 import time
+from datetime import datetime, timezone
 from email import message_from_bytes
 from email.message import EmailMessage
 from email.policy import default
@@ -85,6 +86,8 @@ def folders(imap):
     _, lines = imap.list()
     found, names = {'Inbox': 'INBOX'}, {}
     for line in lines or []:
+        if isinstance(line, tuple):  # folder name sent as a literal
+            line = line[0].rsplit(b'{', 1)[0] + b'"' + line[1].replace(b'"', b'\\"') + b'"'
         text = line.decode('utf-8', 'replace') if isinstance(line, bytes) else str(line)
         match = re.match(r'\((?P<flags>[^)]*)\) (?:"(?:[^"\\]|\\.)*"|NIL) (?P<name>.+)$', text)
         if not match:
@@ -305,11 +308,14 @@ def draft(table, imap, name, account, data):
             msg['References'] = parent
     msg.set_content(content['body'])
     # Claim before APPEND: a retry of the same request never creates a second draft.
+    # A claim stuck in "saving" (function stopped mid-request) can be retaken after 10 minutes.
     claim = {'pk': 'external#' + name, 'sk': 'DRAFT#' + hashlib.sha256(request.encode()).hexdigest()[:32]}
+    stale = datetime.fromtimestamp(time.time() - 600, timezone.utc).isoformat(timespec='microseconds').replace('+00:00', 'Z')
     try:
         table.put_item(Item={**claim, 'status': 'saving', 'reason': reason, 'created': service.timestamp()},
-                       ConditionExpression='attribute_not_exists(pk) OR #s = :failed',
-                       ExpressionAttributeNames={'#s': 'status'}, ExpressionAttributeValues={':failed': 'failed'})
+                       ConditionExpression='attribute_not_exists(pk) OR #s = :failed OR (#s = :saving AND created < :stale)',
+                       ExpressionAttributeNames={'#s': 'status'},
+                       ExpressionAttributeValues={':failed': 'failed', ':saving': 'saving', ':stale': stale})
     except ClientError as exc:
         if exc.response['Error']['Code'] != 'ConditionalCheckFailedException': raise
         existing = table.get_item(Key=claim, ConsistentRead=True)['Item']
