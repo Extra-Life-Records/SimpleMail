@@ -202,13 +202,20 @@ search, read and download attachments (3 MB). It cannot send, draft, move, flag 
 and reading never marks mail as read. Each request logs one line with the endpoint kind, mailbox and
 status, never IDs, queries or content (90-day retention).
 
-Deploy (owner, with an AWS operator profile; preserve every existing parameter):
+Deploy (owner, with an AWS operator profile). Pass the **complete** live parameter set: a missed
+`CallbackUrl` would fall back to its default and change `Client`'s callback URLs.
 
 ```powershell
+# 1. Read the live parameters. Every one must be passed again below.
+aws cloudformation describe-stacks --region eu-west-1 --profile <operator-profile> `
+  --stack-name playloudr-reserved-mail --query 'Stacks[0].Parameters'
+# 2. Build, then create a change set without executing it.
 sam build --template-file cloud/template.yaml
 sam deploy --region eu-west-1 --profile <operator-profile> --stack-name playloudr-reserved-mail `
-  --capabilities CAPABILITY_IAM --no-execute-changeset `
-  --parameter-overrides ReaderEnabled=true <existing parameters unchanged>
+  --capabilities CAPABILITY_IAM --resolve-s3 --no-execute-changeset `
+  --parameter-overrides AuthDomain=<live> CallbackUrl=<live> Domain=<live> ReceiveDomain=<live> `
+  BudgetEmail=<live> SendingEnabled=<live> ApiReservedConcurrency=<live> CreateSendingIdentity=<live> `
+  ReaderEnabled=true ReaderMailboxes=""
 ```
 
 Review the change set before executing it. Expect **Add** for the `Reader*` resources (resource
@@ -229,7 +236,8 @@ user pool > App clients > `mail-reader`. In the Claude cloud environment:
 - Check from a session: `python3 env_mail_mcp.py check` lists the readable addresses.
 
 Off switch: redeploy with `ReaderEnabled=false`, which deletes the client, so every token stops within the hour.
-To rotate the key, delete and recreate the app client the same way, then replace the network secret.
+To rotate the key, redeploy with `ReaderEnabled=false`, then `true`. That issues a new client ID and
+secret, so update `SIMPLEMAIL_CLOUD_CLIENT_ID` and replace the network secret.
 
 ## Required live acceptance, all outstanding
 
