@@ -212,8 +212,11 @@ employee removes their inbox from the reader on the next request.
   with its reason and `reply_to_id`. The same `request_id` always maps to the same draft, so retries
   never duplicate it. The robot never edits an existing draft or changes read state.
 
+Listings read 10 index entries per page *before* the folder, unread, untriaged or search
+filter. A page can be empty while more mail remains, so callers must follow `cursor` until it is null.
+
 Each request logs one line with the action, mailbox and status, never IDs, queries,
-recipients or content (90-day retention).
+recipients or content (90-day retention, kept after switch-off).
 
 Deploy (owner, with an AWS operator profile). Pass the **complete** live parameter set: a missed
 `CallbackUrl` would fall back to its default and change `Client`'s callback URLs.
@@ -228,7 +231,7 @@ sam deploy --region eu-west-1 --profile <operator-profile> --stack-name playloud
   --capabilities CAPABILITY_IAM --resolve-s3 --no-execute-changeset `
   --parameter-overrides AuthDomain=<live> CallbackUrl=<live> Domain=<live> ReceiveDomain=<live> `
   BudgetEmail=<live> SendingEnabled=<live> ApiReservedConcurrency=<live> CreateSendingIdentity=<live> `
-  ReaderEnabled=true ReaderMailboxes=""
+  ReaderEnabled=true
 ```
 
 Review the change set before executing it. Expect **Add** for the `Reader*` resources (resource
@@ -242,15 +245,18 @@ user pool > App clients > `mail-reader`. In the Claude cloud environment:
 
 - **Network secret** for the `AuthUrl` host: type *Username and password*, username = client ID and
   password = client secret. With the full form, use header `Authorization`, prefix `Basic` and
-  value `base64(client_id:client_secret)`. Never put the secret in environment variables or chat.
+  value `base64(client_id:client_secret)`. Never put the secret in the Claude environment's
+  variables or in chat. `SIMPLEMAIL_CLOUD_CLIENT_SECRET` exists only for hosts without network
+  secrets (e.g. a Pi), where it stays in that host's own protected settings.
 - **Environment variables** (not secret):
   `SIMPLEMAIL_CLOUD_API_URL=<ReaderApiUrl>`, `SIMPLEMAIL_CLOUD_AUTH_URL=<AuthUrl>`,
   `SIMPLEMAIL_CLOUD_CLIENT_ID=<ReaderClientId>`.
 - Check from a session: `python3 env_mail_mcp.py check` lists the readable addresses.
 
 Off switch: redeploy with `ReaderEnabled=false`, which deletes the client, so every token stops within the hour.
-To rotate the key, redeploy with `ReaderEnabled=false`, then `true`. That issues a new client ID and
-secret, so update `SIMPLEMAIL_CLOUD_CLIENT_ID` and replace the network secret.
+To rotate the key, redeploy with `ReaderEnabled=false`, then `true`. That recreates the client and the
+reader API, so the client ID, secret **and** `ReaderApiUrl` all change: update
+`SIMPLEMAIL_CLOUD_CLIENT_ID` and `SIMPLEMAIL_CLOUD_API_URL`, and replace the network secret.
 
 ## Required live acceptance, all outstanding
 

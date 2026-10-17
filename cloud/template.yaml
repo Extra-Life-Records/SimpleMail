@@ -239,6 +239,8 @@ Resources:
       AllowedOAuthFlowsUserPoolClient: true
       AllowedOAuthFlows: [client_credentials]
       AllowedOAuthScopes: [mail-reader/read, mail-reader/triage]
+      # Machine client only: no password or SRP sign-in for a person.
+      ExplicitAuthFlows: [ALLOW_REFRESH_TOKEN_AUTH]
       SupportedIdentityProviders: [COGNITO]
       AccessTokenValidity: 60
       TokenValidityUnits: {AccessToken: minutes}
@@ -269,9 +271,13 @@ Resources:
         Variables: {READER_CLIENT_ID: !Ref ReaderClient, READER_MAILBOXES: !Ref ReaderMailboxes}
       Policies:
         - Statement:
+            # Mailbox META rows and mail rows only; ADMIN and RECEIPT stay unreadable.
             - Effect: Allow
               Action: [dynamodb:GetItem, dynamodb:Query]
               Resource: [!GetAtt MailTable.Arn, !Sub '${MailTable.Arn}/index/*']
+              Condition:
+                ForAllValues:StringLike:
+                  dynamodb:LeadingKeys: [one, two, three, four, five, 'one#*', 'two#*', 'three#*', 'four#*', 'five#*']
             # Mail rows only: partition keys are mailbox#generation. META, ADMIN
             # and RECEIPT records stay out of reach. No DeleteItem.
             - Effect: Allow
@@ -299,6 +305,8 @@ Resources:
   ReaderLogs:
     Type: AWS::Logs::LogGroup
     Condition: ReaderOn
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
     Properties: {LogGroupName: !Sub '/aws/lambda/${ReaderFunction}', RetentionInDays: 90}
   ReceiveTopic:
     Type: AWS::SNS::Topic
