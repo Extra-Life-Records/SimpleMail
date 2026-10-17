@@ -187,6 +187,50 @@ them as Member/Premium. They handle verification and terms. Owner plus four empl
 fills five seats; the fifth email may remain reserved. Invitations expire after
 21 days. Never transfer an old employee's Claude account or history.
 
+## Robot reader (read-only access for headless owner tools)
+
+Off by default (`ReaderEnabled=false`). When on, it adds a Cognito machine app client
+(`client_credentials`, scope `mail-reader/read`, one-hour tokens), a **separate** HTTP API
+with its own JWT authorizer, and `ReaderFunction` (`src/reader.py`), whose role has
+DynamoDB and S3 **read only** and no SES. The owner/employee API, its authorizer and
+the desktop client are unchanged.
+
+The reader sees Reserved (unassigned) mailboxes, plus Assigned ones listed in
+`ReaderMailboxes` (e.g. `two,three`). Disabled mailboxes are never visible. Assigning an
+employee removes their inbox from the reader on the next request. It can list,
+search, read and download attachments (3 MB). It cannot send, draft, move, flag or delete,
+and reading never marks mail as read. Each request logs one line with the endpoint kind, mailbox and
+status, never IDs, queries or content (90-day retention).
+
+Deploy (owner, with an AWS operator profile; preserve every existing parameter):
+
+```powershell
+sam build --template-file cloud/template.yaml
+sam deploy --region eu-west-1 --profile <operator-profile> --stack-name playloudr-reserved-mail `
+  --capabilities CAPABILITY_IAM --no-execute-changeset `
+  --parameter-overrides ReaderEnabled=true <existing parameters unchanged>
+```
+
+Review the change set before executing it. Expect **Add** for the `Reader*` resources (resource
+server, app client, API, stage, routes, authorizer, function, role, permissions, log group) and a code-only
+**Modify** for the existing functions, because `src/` now also contains `reader.py`. `service.py` only moves
+its listing and reading code into shared functions. There should be no **Replace** and no change to `Pool`,
+`Client`, `HttpApi`, `MailTable` or `MailBucket`.
+
+Then copy the outputs `ReaderApiUrl`, `AuthUrl` and `ReaderClientId`. The client secret is under Cognito >
+user pool > App clients > `mail-reader`. In the Claude cloud environment:
+
+- **Network secret** for the `AuthUrl` host: type *Username and password*, username = client ID and
+  password = client secret. With the full form, use header `Authorization`, prefix `Basic` and
+  value `base64(client_id:client_secret)`. Never put the secret in environment variables or chat.
+- **Environment variables** (not secret):
+  `SIMPLEMAIL_CLOUD_API_URL=<ReaderApiUrl>`, `SIMPLEMAIL_CLOUD_AUTH_URL=<AuthUrl>`,
+  `SIMPLEMAIL_CLOUD_CLIENT_ID=<ReaderClientId>`.
+- Check from a session: `python3 env_mail_mcp.py check` lists the readable addresses.
+
+Off switch: redeploy with `ReaderEnabled=false`, which deletes the client, so every token stops within the hour.
+To rotate the key, delete and recreate the app client the same way, then replace the network secret.
+
 ## Required live acceptance, all outstanding
 
 - [ ] Five public deliveries and Gmail/Outlook replies, attachments and sender authentication.

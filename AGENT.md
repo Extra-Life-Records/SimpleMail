@@ -280,6 +280,14 @@ and allow `mail.livemail.co.uk` in the environment's network policy: the default
 policy blocks it. `python3 env_mail_mcp.py check` logs in and prints the unread
 count, without the password.
 
+For the AWS mailboxes (one to five at extraliferecords.com), set
+`SIMPLEMAIL_CLOUD_API_URL`, `SIMPLEMAIL_CLOUD_AUTH_URL` and
+`SIMPLEMAIL_CLOUD_CLIENT_ID` instead. The same server then uses the read-only robot
+reader (`cloud_reader.py`): `mailbox_list`, `mailbox_unread` (every mailbox at
+once, or one), `mailbox_search`, `mailbox_read` and `mailbox_attachment`. The reader
+client secret belongs in a network secret, not an environment variable. See
+`cloud/README.md`, "Robot reader".
+
 ## Verification
 
 ```powershell
