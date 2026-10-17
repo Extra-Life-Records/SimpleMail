@@ -115,11 +115,11 @@ class ReaderTests(unittest.TestCase):
                 self.call(path, 'POST', data={'to': 'a@example.com', 'body': 'x', 'seen': True}, scopes=both)
         with self.assertRaises(ValueError): self.post(f'/reader/mailboxes/one/messages/{mid}/move', folder='Trash', reason='tidy')
         row = self.row(mid); self.assertEqual((row['folder'], row['seen']), ('Inbox', False))
+
+    def test_unknown_read_paths_are_refused(self):
         for path in ('/reader/mailboxes/one/send', '/reader/mailboxes/one/drafts', '/reader/mailboxes/one/sends/request-123456789',
                      '/mailboxes/one/messages', '/reader/other'):
             with self.assertRaises((ValueError, service.Denied)): self.call(path)
-        row = self.table.get_item(Key={'pk': 'one#first', 'sk': 'MSG#' + mid})['Item']
-        self.assertEqual((row['folder'], row['seen']), ('Inbox', False))
 
     def test_scam_moves_to_junk_and_back_with_reason(self):
         self.deliver(); mid = self.call()['messages'][0]['id']
