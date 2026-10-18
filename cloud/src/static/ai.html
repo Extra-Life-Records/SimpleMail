@@ -1,0 +1,8 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>AI connections · SimpleMail</title><link rel="stylesheet" href="style.css"></head>
+<body><header><strong>SimpleMail · AI connections</strong><a href="index.html">Back to inbox</a></header>
+<div id="status" role="status">Loading your connections…</div>
+<section><h1>Your mail, your permissions</h1><p>Connect a compatible AI using this remote MCP address. Sign in with your SimpleMail account, then grant only the mailboxes it needs here.</p><label>MCP address<input id="endpoint" readonly></label>
+<form id="permissions"><label>OAuth connection<select id="client"></select></label><div id="mailboxes"></div><label><input id="enabled" type="checkbox">Enable this connection</label><button>Save mailbox permissions</button></form></section>
+<section><h2>Drafts waiting for review</h2><p>Check the sender, recipients, full message and attachments. Approval applies only to this exact revision and expires after 24 hours. Editing it in SimpleMail requires another review.</p><button id="refresh">Refresh drafts</button><div id="drafts"></div></section>
+<article id="review" hidden></article><script src="ai.js"></script></body></html>
