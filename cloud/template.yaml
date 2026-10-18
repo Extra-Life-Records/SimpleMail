@@ -10,15 +10,20 @@ Parameters:
     Type: String
     Default: 'false'
     AllowedValues: ['true', 'false']
+  McpResourceUrl:
+    Type: String
+    Default: https://localhost.invalid/mcp
+    AllowedPattern: '^https://[^\s#]+/mcp$'
+    Description: Existing ApiUrl output followed by /mcp; avoids a circular API-to-function dependency.
   McpCallbackUrl:
     Type: String
     Default: https://localhost.invalid/callback
-    AllowedPattern: '^https://[^\s]+$'
+    AllowedPattern: '^(https://[^\s#]+|http://localhost:[0-9]{1,5}/[^\s#]*)$'
     Description: Exact callback URL supplied by the first AI connector. No wildcard callbacks.
   McpSecondCallbackUrl:
     Type: String
     Default: https://localhost.invalid/callback
-    AllowedPattern: '^https://[^\s]+$'
+    AllowedPattern: '^(https://[^\s#]+|http://localhost:[0-9]{1,5}/[^\s#]*)$'
     Description: Exact callback URL supplied by a second AI connector; it has independent grants.
   Domain:
     Type: String
@@ -325,7 +330,7 @@ Resources:
       MemorySize: 512
       Environment:
         Variables:
-          MCP_RESOURCE: !Sub 'https://${HttpApi}.execute-api.${AWS::Region}.amazonaws.com/mcp'
+          MCP_RESOURCE: !Ref McpResourceUrl
           MCP_ISSUER: !Sub 'https://cognito-idp.${AWS::Region}.amazonaws.com/${Pool}'
           MCP_CLIENT_IDS: !Join [',', [!Ref McpClient, !Ref McpSecondClient]]
           EXTERNAL_SECRET: !Ref ExternalMailboxesSecret
