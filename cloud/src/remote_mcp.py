@@ -10,7 +10,15 @@ import ai_access as access
 from service import Denied
 
 VERSION = '2025-06-18'
-SCOPES = {'read': 'simplemail-ai/read', 'draft': 'simplemail-ai/draft', 'send_approved': 'simplemail-ai/send-approved'}
+SCOPE_NAMES = {'read': 'read', 'draft': 'draft', 'send_approved': 'send-approved'}
+
+
+def scope(permission):
+    # Cognito binds custom scopes only when their resource-server identifier
+    # matches the requested resource/audience URL.
+    return os.environ['MCP_RESOURCE'] + '/' + SCOPE_NAMES[permission]
+
+
 FIELDS = {
     'mailbox': {'type': 'string', 'description': 'Mailbox name returned by mailboxes'},
     'message_id': {'type': 'string'}, 'part': {'type': 'integer', 'minimum': 0},
@@ -55,7 +63,7 @@ def verify_token(authorization):
         raise Denied('Invalid or expired access token') from None
     if claims.get('token_use') != 'access' or claims.get('client_id') not in os.environ['MCP_CLIENT_IDS'].split(','):
         raise Denied('Use the configured OAuth connection')
-    if SCOPES['read'] not in claims.get('scope', '').split(): raise Denied('Mail read scope required')
+    if scope('read') not in claims.get('scope', '').split(): raise Denied('Mail read scope required')
     return claims
 
 
@@ -75,7 +83,7 @@ def call_tool(table, s3, ses, claims, name, args):
             except Denied: pass
         return {'mailboxes': boxes}
     permission = 'draft' if name == 'mail_draft' else 'send_approved' if name == 'mail_send_approved' else 'read'
-    if SCOPES[permission] not in claims.get('scope', '').split(): raise Denied('Required OAuth scope was not granted')
+    if scope(permission) not in claims.get('scope', '').split(): raise Denied('Required OAuth scope was not granted')
     if name == 'mail_send_approved': return access.send_approved(table, s3, ses, subject, client, args['reference'])
     mailbox = access.grant(table, subject, client, args['mailbox'], permission)
     if name == 'mail_draft': return access.save_draft(table, s3, subject, client, args['mailbox'], args)
@@ -117,13 +125,13 @@ def api(event, context):
     headers = {'Content-Type': 'application/json', 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff'}
     path = event.get('rawPath', ''); method = event.get('requestContext', {}).get('http', {}).get('method', '')
     if method == 'GET' and path in ('/.well-known/oauth-protected-resource', '/.well-known/oauth-protected-resource/mcp'):
-        return {'statusCode': 200, 'headers': headers, 'body': json.dumps({'resource': resource, 'authorization_servers': [os.environ['MCP_ISSUER']], 'scopes_supported': list(SCOPES.values()), 'bearer_methods_supported': ['header'], 'resource_name': 'SimpleMail'})}
+        return {'statusCode': 200, 'headers': headers, 'body': json.dumps({'resource': resource, 'authorization_servers': [os.environ['MCP_ISSUER']], 'scopes_supported': [scope(permission) for permission in SCOPE_NAMES], 'bearer_methods_supported': ['header'], 'resource_name': 'SimpleMail'})}
     supplied = {k.lower(): v for k, v in (event.get('headers') or {}).items()}
     if supplied.get('origin') and supplied['origin'] != origin:
         return {'statusCode': 403, 'headers': headers, 'body': json.dumps({'error': 'Origin not allowed'})}
     try: claims = verify_token(supplied.get('authorization', ''))
     except (Denied, jwt.PyJWTError):
-        headers['WWW-Authenticate'] = f'Bearer resource_metadata="{origin}/.well-known/oauth-protected-resource/mcp", scope="{SCOPES["read"]}"'
+        headers['WWW-Authenticate'] = f'Bearer resource_metadata="{origin}/.well-known/oauth-protected-resource/mcp", scope="{scope("read")}"'
         return {'statusCode': 401, 'headers': headers, 'body': json.dumps({'error': 'OAuth connection required'})}
     if method != 'POST': return {'statusCode': 405, 'headers': {**headers, 'Allow': 'POST'}, 'body': ''}
     if 'application/json' not in supplied.get('content-type', ''):

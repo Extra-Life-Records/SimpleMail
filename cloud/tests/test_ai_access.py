@@ -129,6 +129,7 @@ class ProtocolTests(unittest.TestCase):
             self.assertIn('oauth-protected-resource/mcp',response['headers']['WWW-Authenticate'])
             metadata=remote_mcp.api({'rawPath':'/.well-known/oauth-protected-resource/mcp','requestContext':{'http':{'method':'GET'}}},None)
             self.assertEqual(json.loads(metadata['body'])['resource'],'https://mail.example/mcp')
+            self.assertEqual(json.loads(metadata['body'])['scopes_supported'], ['https://mail.example/mcp/read', 'https://mail.example/mcp/draft', 'https://mail.example/mcp/send-approved'])
         self.assertFalse(any(tool['name'] in ('approve','mail_approve','set_permissions') for tool in remote_mcp.TOOLS))
         self.assertEqual(remote_mcp.rpc({}, {'jsonrpc':'2.0','id':1,'method':'initialize'})['result']['protocolVersion'],'2025-06-18')
         self.assertIsNone(remote_mcp.rpc({}, {'jsonrpc':'2.0','method':'notifications/initialized'}))
@@ -138,11 +139,11 @@ class ProtocolTests(unittest.TestCase):
         import remote_mcp
         from cryptography.hazmat.primitives.asymmetric import rsa
         key=rsa.generate_private_key(public_exponent=65537,key_size=2048)
-        claims={'iss':'https://issuer.example','aud':'https://mail.example/mcp','sub':'owner','client_id':'clientA','token_use':'access','scope':'simplemail-ai/read','iat':int(time.time()),'exp':int(time.time())+60}
+        claims={'iss':'https://issuer.example','aud':'https://mail.example/mcp','sub':'owner','client_id':'clientA','token_use':'access','scope':'https://mail.example/mcp/read','iat':int(time.time()),'exp':int(time.time())+60}
         mockkeys=MagicMock(); mockkeys.get_signing_key_from_jwt.return_value.key=key.public_key()
         with patch.dict(os.environ,MCP_RESOURCE=claims['aud'],MCP_ISSUER=claims['iss'],MCP_CLIENT_IDS='clientA'),patch.object(remote_mcp,'keys',return_value=mockkeys):
             self.assertEqual(remote_mcp.verify_token('Bearer '+jwt.encode(claims,key,algorithm='RS256'))['sub'],'owner')
-            for update in [{'aud':'https://wrong.example'},{'client_id':'anotherAI'},{'token_use':'id'},{'exp':1}]:
+            for update in [{'aud':'https://wrong.example'},{'client_id':'anotherAI'},{'token_use':'id'},{'exp':1},{'scope':'simplemail-ai/read'},{'scope':'https://mail.example/mcp/draft'}]:
                 with self.assertRaises(service.Denied): remote_mcp.verify_token('Bearer '+jwt.encode({**claims,**update},key,algorithm='RS256'))
             # Classic Cognito hosted UI can complete OAuth without binding aud.
             unbound = {name: value for name, value in claims.items() if name != 'aud'}

@@ -290,7 +290,7 @@ Resources:
     Condition: McpOn
     Properties:
       UserPoolId: !Ref Pool
-      Identifier: simplemail-ai
+      Identifier: !Ref McpResourceUrl
       Name: SimpleMail AI connections
       Scopes:
         - {ScopeName: read, ScopeDescription: Read explicitly granted mailboxes}
@@ -306,7 +306,11 @@ Resources:
       GenerateSecret: false
       AllowedOAuthFlowsUserPoolClient: true
       AllowedOAuthFlows: [code]
-      AllowedOAuthScopes: [openid, simplemail-ai/read, simplemail-ai/draft, simplemail-ai/send-approved]
+      AllowedOAuthScopes:
+        - openid
+        - !Sub '${McpResourceUrl}/read'
+        - !Sub '${McpResourceUrl}/draft'
+        - !Sub '${McpResourceUrl}/send-approved'
       SupportedIdentityProviders: [COGNITO]
       CallbackURLs: [!Ref McpCallbackUrl]
       ExplicitAuthFlows: [ALLOW_REFRESH_TOKEN_AUTH]
@@ -325,7 +329,11 @@ Resources:
       GenerateSecret: false
       AllowedOAuthFlowsUserPoolClient: true
       AllowedOAuthFlows: [code]
-      AllowedOAuthScopes: [openid, simplemail-ai/read, simplemail-ai/draft, simplemail-ai/send-approved]
+      AllowedOAuthScopes:
+        - openid
+        - !Sub '${McpResourceUrl}/read'
+        - !Sub '${McpResourceUrl}/draft'
+        - !Sub '${McpResourceUrl}/send-approved'
       SupportedIdentityProviders: [COGNITO]
       CallbackURLs: [!Ref McpSecondCallbackUrl]
       ExplicitAuthFlows: [ALLOW_REFRESH_TOKEN_AUTH]
