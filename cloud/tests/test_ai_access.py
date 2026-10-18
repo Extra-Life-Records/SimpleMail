@@ -144,3 +144,7 @@ class ProtocolTests(unittest.TestCase):
             self.assertEqual(remote_mcp.verify_token('Bearer '+jwt.encode(claims,key,algorithm='RS256'))['sub'],'owner')
             for update in [{'aud':'https://wrong.example'},{'client_id':'anotherAI'},{'token_use':'id'},{'exp':1}]:
                 with self.assertRaises(service.Denied): remote_mcp.verify_token('Bearer '+jwt.encode({**claims,**update},key,algorithm='RS256'))
+            # Classic Cognito hosted UI can complete OAuth without binding aud.
+            unbound = {name: value for name, value in claims.items() if name != 'aud'}
+            with self.assertRaises(service.Denied):
+                remote_mcp.verify_token('Bearer '+jwt.encode(unbound,key,algorithm='RS256'))

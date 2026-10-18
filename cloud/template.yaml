@@ -175,7 +175,19 @@ Resources:
           - {Name: verified_email, Priority: 1}
   PoolDomain:
     Type: AWS::Cognito::UserPoolDomain
-    Properties: {Domain: !Ref AuthDomain, UserPoolId: !Ref Pool}
+    Properties:
+      Domain: !Ref AuthDomain
+      UserPoolId: !Ref Pool
+      # Resource-bound access tokens require managed login, not hosted UI v1.
+      ManagedLoginVersion: !If [McpOn, 2, 1]
+  OwnerLoginBranding:
+    Type: AWS::Cognito::ManagedLoginBranding
+    Condition: McpOn
+    DependsOn: PoolDomain
+    Properties:
+      UserPoolId: !Ref Pool
+      ClientId: !Ref Client
+      UseCognitoProvidedValues: true
   Client:
     Type: AWS::Cognito::UserPoolClient
     Properties:
@@ -322,6 +334,22 @@ Resources:
       TokenValidityUnits: {AccessToken: minutes, RefreshToken: days}
       EnableTokenRevocation: true
       PreventUserExistenceErrors: ENABLED
+  McpLoginBranding:
+    Type: AWS::Cognito::ManagedLoginBranding
+    Condition: McpOn
+    DependsOn: PoolDomain
+    Properties:
+      UserPoolId: !Ref Pool
+      ClientId: !Ref McpClient
+      UseCognitoProvidedValues: true
+  McpSecondLoginBranding:
+    Type: AWS::Cognito::ManagedLoginBranding
+    Condition: McpOn
+    DependsOn: PoolDomain
+    Properties:
+      UserPoolId: !Ref Pool
+      ClientId: !Ref McpSecondClient
+      UseCognitoProvidedValues: true
   McpFunction:
     Type: AWS::Serverless::Function
     Condition: McpOn
