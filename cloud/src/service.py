@@ -330,6 +330,10 @@ def delivery(event, context):
 
 
 def dispatch(table, s3, ses, subject, method, path, data, query):
+    if path.startswith('/ai/'):
+        if os.environ.get('MCP_ENABLED') != 'true': raise Denied('AI connections are not enabled')
+        from ai_access import owner_dispatch
+        return owner_dispatch(table, s3, subject, method, path, data)
     if method == 'GET' and path == '/mailboxes':
         items = []
         for name in NAMES:
@@ -447,6 +451,8 @@ def api(event, context):
         claims = event['requestContext']['authorizer']['jwt']['claims']
         if claims.get('token_use') != 'access' or int(claims.get('exp', 0)) <= int(time.time()):
             raise Denied('Session expired; sign in again')
+        if event.get('rawPath', '').startswith('/ai/') and claims.get('client_id') != os.environ.get('OWNER_CLIENT_ID'):
+            raise Denied('Open AI settings with the owner SimpleMail session')
         raw = event.get('body') or '{}'
         if event.get('isBase64Encoded'): raw = base64.b64decode(raw).decode()
         if len(raw) > 4500000: raise ValueError('Request exceeds size limit')

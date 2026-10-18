@@ -2,6 +2,24 @@ AWSTemplateFormatVersion: '2010-09-09'
 Transform: AWS::Serverless-2016-10-31
 Description: Private Extra Life Records reserved mailboxes (pilot; routing enabled separately)
 Parameters:
+  McpEnabled:
+    Type: String
+    Default: 'false'
+    AllowedValues: ['true', 'false']
+  AiSendingEnabled:
+    Type: String
+    Default: 'false'
+    AllowedValues: ['true', 'false']
+  McpCallbackUrl:
+    Type: String
+    Default: https://localhost.invalid/callback
+    AllowedPattern: '^https://[^\s]+$'
+    Description: Exact callback URL supplied by the first AI connector. No wildcard callbacks.
+  McpSecondCallbackUrl:
+    Type: String
+    Default: https://localhost.invalid/callback
+    AllowedPattern: '^https://[^\s]+$'
+    Description: Exact callback URL supplied by a second AI connector; it has independent grants.
   Domain:
     Type: String
     Default: extraliferecords.com
@@ -61,6 +79,8 @@ Globals:
         DOMAIN: !Ref Domain
         RECEIVE_DOMAIN: !Ref ReceiveDomain
 Conditions:
+  McpOn: !Equals [!Ref McpEnabled, 'true']
+  McpExternalOn: !And [!Condition McpOn, !Not [!Equals [!Ref ExternalMailboxesSecret, '']]]
   ReserveApiCapacity: !Not [!Equals [!Ref ApiReservedConcurrency, 0]]
   WebCallbackConfigured: !Not [!Equals [!Ref CallbackUrl, 'http://localhost:8765/callback']]
   NewSendingIdentity: !Equals [!Ref CreateSendingIdentity, 'true']
@@ -190,10 +210,23 @@ Resources:
       MemorySize: 512
       ReservedConcurrentExecutions: !If [ReserveApiCapacity, !Ref ApiReservedConcurrency, !Ref 'AWS::NoValue']
       Environment:
-        Variables: {SENDING_ENABLED: !Ref SendingEnabled, CONFIGURATION_SET: !Ref SendingConfiguration}
+        Variables:
+          SENDING_ENABLED: !Ref SendingEnabled
+          CONFIGURATION_SET: !Ref SendingConfiguration
+          MCP_ENABLED: !Ref McpEnabled
+          OWNER_CLIENT_ID: !Ref Client
+          MCP_CLIENT_IDS: !If [McpOn, !Join [',', [!Ref McpClient, !Ref McpSecondClient]], '']
+          EXTERNAL_SECRET: !If [McpExternalOn, !Ref ExternalMailboxesSecret, '']
       Policies:
         - DynamoDBCrudPolicy: {TableName: !Ref MailTable}
         - S3CrudPolicy: {BucketName: !Ref MailBucket}
+        - !If
+          - McpExternalOn
+          - Statement:
+              - Effect: Allow
+                Action: secretsmanager:GetSecretValue
+                Resource: !Ref ExternalMailboxesSecret
+          - !Ref 'AWS::NoValue'
         - Statement:
             - Effect: Allow
               Action: ses:SendEmail
@@ -211,6 +244,7 @@ Resources:
       Events:
         Root: {Type: HttpApi, Properties: {ApiId: !Ref HttpApi, Path: /mailboxes, Method: GET}}
         Mail: {Type: HttpApi, Properties: {ApiId: !Ref HttpApi, Path: '/mailboxes/{proxy+}', Method: ANY}}
+        AiSettings: {Type: HttpApi, Properties: {ApiId: !Ref HttpApi, Path: '/ai/{proxy+}', Method: ANY}}
   WebFunction:
     Type: AWS::Serverless::Function
     Properties:
@@ -234,6 +268,106 @@ Resources:
       Scopes:
         - {ScopeName: read, ScopeDescription: Read mail in unassigned and named mailboxes}
         - {ScopeName: triage, ScopeDescription: 'Move between Inbox and Junk, tag, save review drafts; never send'}
+  McpScopes:
+    Type: AWS::Cognito::UserPoolResourceServer
+    Condition: McpOn
+    Properties:
+      UserPoolId: !Ref Pool
+      Identifier: simplemail-ai
+      Name: SimpleMail AI connections
+      Scopes:
+        - {ScopeName: read, ScopeDescription: Read explicitly granted mailboxes}
+        - {ScopeName: draft, ScopeDescription: Save drafts for owner review}
+        - {ScopeName: send-approved, ScopeDescription: Send only the exact revision approved by the mailbox owner}
+  McpClient:
+    Type: AWS::Cognito::UserPoolClient
+    Condition: McpOn
+    DependsOn: McpScopes
+    Properties:
+      UserPoolId: !Ref Pool
+      ClientName: SimpleMail AI connection 1
+      GenerateSecret: false
+      AllowedOAuthFlowsUserPoolClient: true
+      AllowedOAuthFlows: [code]
+      AllowedOAuthScopes: [openid, simplemail-ai/read, simplemail-ai/draft, simplemail-ai/send-approved]
+      SupportedIdentityProviders: [COGNITO]
+      CallbackURLs: [!Ref McpCallbackUrl]
+      ExplicitAuthFlows: [ALLOW_REFRESH_TOKEN_AUTH]
+      AccessTokenValidity: 5
+      RefreshTokenValidity: 30
+      TokenValidityUnits: {AccessToken: minutes, RefreshToken: days}
+      EnableTokenRevocation: true
+      PreventUserExistenceErrors: ENABLED
+  McpSecondClient:
+    Type: AWS::Cognito::UserPoolClient
+    Condition: McpOn
+    DependsOn: McpScopes
+    Properties:
+      UserPoolId: !Ref Pool
+      ClientName: SimpleMail AI connection 2
+      GenerateSecret: false
+      AllowedOAuthFlowsUserPoolClient: true
+      AllowedOAuthFlows: [code]
+      AllowedOAuthScopes: [openid, simplemail-ai/read, simplemail-ai/draft, simplemail-ai/send-approved]
+      SupportedIdentityProviders: [COGNITO]
+      CallbackURLs: [!Ref McpSecondCallbackUrl]
+      ExplicitAuthFlows: [ALLOW_REFRESH_TOKEN_AUTH]
+      AccessTokenValidity: 5
+      RefreshTokenValidity: 30
+      TokenValidityUnits: {AccessToken: minutes, RefreshToken: days}
+      EnableTokenRevocation: true
+      PreventUserExistenceErrors: ENABLED
+  McpFunction:
+    Type: AWS::Serverless::Function
+    Condition: McpOn
+    Properties:
+      Handler: remote_mcp.api
+      MemorySize: 512
+      Environment:
+        Variables:
+          MCP_RESOURCE: !Sub 'https://${HttpApi}.execute-api.${AWS::Region}.amazonaws.com/mcp'
+          MCP_ISSUER: !Sub 'https://cognito-idp.${AWS::Region}.amazonaws.com/${Pool}'
+          MCP_CLIENT_IDS: !Join [',', [!Ref McpClient, !Ref McpSecondClient]]
+          EXTERNAL_SECRET: !Ref ExternalMailboxesSecret
+          AI_SENDING_ENABLED: !Ref AiSendingEnabled
+          SENDING_ENABLED: !Ref SendingEnabled
+          CONFIGURATION_SET: !Ref SendingConfiguration
+      Policies:
+        - Statement:
+            - Effect: Allow
+              Action: [dynamodb:GetItem, dynamodb:Query]
+              Resource: [!GetAtt MailTable.Arn, !Sub '${MailTable.Arn}/index/*']
+            - Effect: Allow
+              Action: [dynamodb:PutItem, dynamodb:UpdateItem]
+              Resource: !GetAtt MailTable.Arn
+              Condition:
+                ForAllValues:StringLike:
+                  dynamodb:LeadingKeys: ['AI#*', 'APPROVAL#*', 'external#*', 'one#*', 'two#*', 'three#*', 'four#*', 'five#*']
+            - Effect: Allow
+              Action: s3:GetObject
+              Resource: !Sub '${MailBucket.Arn}/*'
+            - Effect: Allow
+              Action: s3:PutObject
+              Resource: [!Sub '${MailBucket.Arn}/drafts/*', !Sub '${MailBucket.Arn}/sent/*']
+            - Effect: Allow
+              Action: ses:SendEmail
+              Resource:
+                - !Sub 'arn:aws:ses:${AWS::Region}:${AWS::AccountId}:identity/${Domain}'
+                - !Sub 'arn:aws:ses:${AWS::Region}:${AWS::AccountId}:configuration-set/${SendingConfiguration}'
+              Condition:
+                StringLike:
+                  ses:FromAddress: [!Sub 'one@${Domain}', !Sub 'two@${Domain}', !Sub 'three@${Domain}', !Sub 'four@${Domain}', !Sub 'five@${Domain}']
+        - !If
+          - McpExternalOn
+          - Statement:
+              - Effect: Allow
+                Action: secretsmanager:GetSecretValue
+                Resource: !Ref ExternalMailboxesSecret
+          - !Ref 'AWS::NoValue'
+      Events:
+        Mcp: {Type: HttpApi, Properties: {ApiId: !Ref HttpApi, Path: /mcp, Method: ANY, Auth: {Authorizer: NONE}}}
+        Metadata: {Type: HttpApi, Properties: {ApiId: !Ref HttpApi, Path: '/.well-known/oauth-protected-resource', Method: GET, Auth: {Authorizer: NONE}}}
+        PathMetadata: {Type: HttpApi, Properties: {ApiId: !Ref HttpApi, Path: '/.well-known/oauth-protected-resource/mcp', Method: GET, Auth: {Authorizer: NONE}}}
   ReaderClient:
     Type: AWS::Cognito::UserPoolClient
     Condition: ReaderOn
@@ -461,6 +595,15 @@ Resources:
         - Notification: {NotificationType: ACTUAL, ComparisonOperator: GREATER_THAN, Threshold: 20, ThresholdType: ABSOLUTE_VALUE}
           Subscribers: [{SubscriptionType: EMAIL, Address: !Ref BudgetEmail}]
 Outputs:
+  McpUrl:
+    Condition: McpOn
+    Value: !Sub 'https://${HttpApi}.execute-api.${AWS::Region}.amazonaws.com/mcp'
+  McpOAuthClientId:
+    Condition: McpOn
+    Value: !Ref McpClient
+  McpSecondOAuthClientId:
+    Condition: McpOn
+    Value: !Ref McpSecondClient
   ApiUrl: {Value: !Sub 'https://${HttpApi}.execute-api.${AWS::Region}.amazonaws.com'}
   WebInbox: {Value: !Sub 'https://${HttpApi}.execute-api.${AWS::Region}.amazonaws.com/ui/index.html'}
   Table: {Value: !Ref MailTable}
