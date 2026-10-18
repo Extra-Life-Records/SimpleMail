@@ -290,7 +290,8 @@ reader (`cloud_reader.py`): `mailbox_list`, `mailbox_unread` and
 scam, needs_fix, reply or fyi, with a one-line note), `mailbox_move` (Inbox or Junk
 only) and `mailbox_draft` (a new review draft, never sent). It cannot send, delete or
 mark mail read. The reader client secret belongs in a network secret, not an
-environment variable. See `cloud/README.md`, "Robot reader".
+environment variable. See `cloud/README.md`, "Robot reader". The scheduled cloud
+triage follows `triage/ROUTINE.md`; the owner's private rules come in its prompt.
 
 ## Verification
 
