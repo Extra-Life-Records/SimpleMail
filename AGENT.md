@@ -280,7 +280,8 @@ and allow `mail.livemail.co.uk` in the environment's network policy: the default
 policy blocks it. `python3 env_mail_mcp.py check` logs in and prints the unread
 count, without the password.
 
-For the AWS mailboxes (one to five at extraliferecords.com), set
+For the AWS mailboxes (one to five at extraliferecords.com), plus any Fasthosts
+mailboxes the owner put in the reader's AWS secret, set
 `SIMPLEMAIL_CLOUD_API_URL`, `SIMPLEMAIL_CLOUD_AUTH_URL` and
 `SIMPLEMAIL_CLOUD_CLIENT_ID` instead. The same server then uses the read-only robot
 reader (`cloud_reader.py`): `mailbox_list`, `mailbox_unread` and
@@ -289,7 +290,8 @@ reader (`cloud_reader.py`): `mailbox_list`, `mailbox_unread` and
 scam, needs_fix, reply or fyi, with a one-line note), `mailbox_move` (Inbox or Junk
 only) and `mailbox_draft` (a new review draft, never sent). It cannot send, delete or
 mark mail read. The reader client secret belongs in a network secret, not an
-environment variable. See `cloud/README.md`, "Robot reader".
+environment variable. See `cloud/README.md`, "Robot reader". The scheduled cloud
+triage follows `triage/ROUTINE.md`; the owner's private rules come in its prompt.
 
 ## Verification
 

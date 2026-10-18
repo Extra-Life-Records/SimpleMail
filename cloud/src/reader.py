@@ -8,7 +8,8 @@ it move mail between Inbox and Junk, tag a message with a triage result, and
 save new drafts for the owner to review. It never changes read state.
 
 The robot sees Reserved (unassigned) mailboxes plus Assigned ones the owner
-names in READER_MAILBOXES; never Disabled ones.
+names in READER_MAILBOXES; never Disabled ones. The owner's Fasthosts mailboxes
+are served the same way by external.py, using logins only AWS can read.
 """
 import base64
 import hashlib
@@ -20,6 +21,7 @@ import time
 import boto3
 from botocore.exceptions import ClientError
 
+import external
 import service
 from service import Denied, NAMES
 
@@ -105,7 +107,7 @@ def draft(table, s3, item, data):
     return {'id': mid, 'revision': revision}
 
 
-def dispatch(table, s3, method, path, query, data=None, scopes=(READ,)):
+def dispatch(table, s3, method, path, query, data=None, scopes=(READ,), imap_opener=None):
     data = data or {}
     if method not in ('GET', 'POST'):
         raise Denied('Not available to the robot')
@@ -122,8 +124,14 @@ def dispatch(table, s3, method, path, query, data=None, scopes=(READ,)):
             except Denied:
                 continue
             items.append({'name': name, 'address': name + '@' + os.environ['DOMAIN'], 'state': item['state']})
+        items += [{'name': name, 'address': account['address'], 'state': 'External', 'provider': 'imap'}
+                  for name, account in external.accounts().items()]
         return {'mailboxes': items}
     if len(parts) < 4: raise ValueError('Unknown endpoint')
+    if parts[2] not in NAMES:
+        account = external.accounts().get(parts[2])
+        if not account: raise Denied('Mailbox is not available to the reader')
+        return external.dispatch(table, account, parts[2], method, parts[3:], query, data, imap_opener)
     item = visible(table, parts[2])
     tail = parts[3:]
     if method == 'GET':
@@ -160,6 +168,8 @@ def api(event, context):
         status = 200
     except Denied as exc:
         status, result = 403, {'error': str(exc)}
+    except external.Unavailable:
+        status, result = 503, {'error': 'Fasthosts mailbox unavailable; check its login in the AWS secret'}
     except (ValueError, KeyError, TypeError) as exc:
         status, result = 400, {'error': 'Invalid request: ' + str(exc)[:100]}
     except Exception:

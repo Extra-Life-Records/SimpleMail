@@ -42,6 +42,11 @@ Parameters:
     Default: ''
     AllowedPattern: '^[a-z,]*$'
     Description: Assigned mailboxes the reader may also read, comma separated (e.g. two,three). Unassigned ones are always readable.
+  ExternalMailboxesSecret:
+    Type: String
+    Default: ''
+    AllowedPattern: '^(arn:aws:secretsmanager:[a-z0-9-]+:[0-9]{12}:secret:[A-Za-z0-9/_+=.@-]+)?$'
+    Description: ARN of the owner-created secret holding the Fasthosts logins for the reader (see README). Empty = AWS mailboxes only.
 Globals:
   Function:
     Runtime: python3.12
@@ -60,6 +65,7 @@ Conditions:
   WebCallbackConfigured: !Not [!Equals [!Ref CallbackUrl, 'http://localhost:8765/callback']]
   NewSendingIdentity: !Equals [!Ref CreateSendingIdentity, 'true']
   ReaderOn: !Equals [!Ref ReaderEnabled, 'true']
+  ExternalOn: !And [!Condition ReaderOn, !Not [!Equals [!Ref ExternalMailboxesSecret, '']]]
 Resources:
   MailBucket:
     Type: AWS::S3::Bucket
@@ -268,30 +274,39 @@ Resources:
       Handler: reader.api
       MemorySize: 512
       Environment:
-        Variables: {READER_CLIENT_ID: !Ref ReaderClient, READER_MAILBOXES: !Ref ReaderMailboxes}
+        Variables: {READER_CLIENT_ID: !Ref ReaderClient, READER_MAILBOXES: !Ref ReaderMailboxes,
+                    EXTERNAL_SECRET: !Ref ExternalMailboxesSecret}
       Policies:
         - Statement:
-            # Mailbox META rows and mail rows only; ADMIN and RECEIPT stay unreadable.
+            # Mailbox META rows, mail rows and external#<name> triage rows only;
+            # ADMIN and RECEIPT stay unreadable.
             - Effect: Allow
               Action: [dynamodb:GetItem, dynamodb:Query]
               Resource: [!GetAtt MailTable.Arn, !Sub '${MailTable.Arn}/index/*']
               Condition:
                 ForAllValues:StringLike:
-                  dynamodb:LeadingKeys: [one, two, three, four, five, 'one#*', 'two#*', 'three#*', 'four#*', 'five#*']
-            # Mail rows only: partition keys are mailbox#generation. META, ADMIN
-            # and RECEIPT records stay out of reach. No DeleteItem.
+                  dynamodb:LeadingKeys: [one, two, three, four, five, 'one#*', 'two#*', 'three#*', 'four#*', 'five#*', 'external#*']
+            # Mail rows only: partition keys are mailbox#generation or external#name.
+            # META, ADMIN and RECEIPT records stay out of reach. No DeleteItem.
             - Effect: Allow
               Action: [dynamodb:PutItem, dynamodb:UpdateItem]
               Resource: !GetAtt MailTable.Arn
               Condition:
                 ForAllValues:StringLike:
-                  dynamodb:LeadingKeys: ['one#*', 'two#*', 'three#*', 'four#*', 'five#*']
+                  dynamodb:LeadingKeys: ['one#*', 'two#*', 'three#*', 'four#*', 'five#*', 'external#*']
             - Effect: Allow
               Action: s3:GetObject
               Resource: !Sub '${MailBucket.Arn}/*'
             - Effect: Allow
               Action: s3:PutObject
               Resource: !Sub '${MailBucket.Arn}/drafts/*'
+            # Fasthosts logins: this one owner-created secret, read only.
+            - !If
+              - ExternalOn
+              - Effect: Allow
+                Action: secretsmanager:GetSecretValue
+                Resource: !Ref ExternalMailboxesSecret
+              - !Ref AWS::NoValue
       Events:
         Root: {Type: HttpApi, Properties: {ApiId: !Ref ReaderHttpApi, Path: /reader/mailboxes, Method: GET}}
         Mail: {Type: HttpApi, Properties: {ApiId: !Ref ReaderHttpApi, Path: '/reader/mailboxes/{proxy+}', Method: GET}}
