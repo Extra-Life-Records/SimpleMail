@@ -58,6 +58,22 @@ def routes():
     return {recipient: name for name, spec in registry().items() for recipient in spec['recipients']}
 
 
+def resolve_recipient(recipient, configured_routes):
+    """Resolve an envelope recipient without widening the approved base/domain.
+
+    SES matches plus labels for configured address conditions. Explicit aliases
+    win, including aliases assigned to a disabled mailbox; mailbox state is
+    checked by the receiver after routing and must never cause fallback.
+    """
+    if recipient in configured_routes:
+        return configured_routes[recipient]
+    local, separator, domain = recipient.partition('@')
+    base, plus, label = local.partition('+')
+    if separator and plus and label:
+        return configured_routes.get(base + '@' + domain)
+    return None
+
+
 def folder(value):
     # Folder names are data, never DynamoDB/S3 keys or URL path components.
     return (isinstance(value, str) and 0 < len(value) <= 500 and

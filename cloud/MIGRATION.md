@@ -14,6 +14,16 @@ canonical address. Exact aliases map to that same partition. Neither headers nor
 client input choose a sender or storage key. Duplicate address ownership, unknown
 IDs and configured-address changes against provisioned metadata fail closed.
 
+SES address conditions also match plus-labelled recipients. The receiver first
+resolves an exact configured address, then an approved base address in the same
+domain by splitting the local part at its first `+`. A nonempty label is required:
+`hello+receipt+source@example.com` can resolve `hello@example.com`, while
+`hello+@example.com` needs its own explicit alias. An exact configured label wins
+even when its target mailbox is Disabled; it must not fall back to another inbox.
+The stored envelope retains the full labelled address (with the existing lowercase
+normalization). Unknown bases/domains still fail before any mailbox writes for
+that notification. This affects receiving only, not sender identities or AI grants.
+
 Use `mail-elr`, `mail-playloudr`, `mail-robots` and `mail-lightspeed`
 for the active source mailboxes. The owner has retired Pippy; omit `mail-pippy`
 from the actual registry even though it remains in the generic example.
