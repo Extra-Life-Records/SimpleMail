@@ -103,6 +103,16 @@ class UnifiedInboxTests(unittest.TestCase):
         self.transport.cloud_save_attachment.return_value = {'path':'selected/a.txt'}
         self.assertEqual(self.api.save_attachment('cloud:two','Inbox','abc',2)['path'], 'selected/a.txt')
 
+    def test_native_search_opts_in_and_preserves_opaque_cursor_and_progress(self):
+        self.transport.cloud_request.return_value = {'messages': [], 'cursor': 'opaque-next',
+            'search_progress': {'phase': 'index', 'scanned': 100, 'next_phase': 'body'}}
+        result = self.provider.search_messages('cloud:one', 'Literal (query)', cursor='opaque-before')
+        self.assertIn('search_mode=indexed', self.transport.cloud_request.call_args.args[1])
+        self.assertIn('limit=100', self.transport.cloud_request.call_args.args[1])
+        self.assertIn('cursor=opaque-before', self.transport.cloud_request.call_args.args[1])
+        self.assertEqual(result['next_cursor'], 'opaque-next')
+        self.assertEqual(result['search_progress']['scanned'], 100)
+
     def test_attachment_chunks_validate_checksum_and_never_cross_mailbox(self):
         data = b'first second'; digest = hashlib.sha256(data).hexdigest()
         self.transport.cloud_request.side_effect = [

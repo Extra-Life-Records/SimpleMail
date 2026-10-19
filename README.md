@@ -199,6 +199,12 @@ attachment downloads and local draft recovery. Their saved Windows-protected log
 is reused; Settings provides **Reconnect employee mailboxes** when it expires.
 There is no separate desktop inbox window. The standalone web inbox remains available.
 
+Cloud search shows indexed matches first, then checks full message text. It follows
+pages automatically in bounded batches, shows progress, and offers **Pause search**
+or **Continue search** while more mail remains. An unfinished search never reports
+"No matches"; switching query or mailbox discards stale responses. This uses an
+opt-in API search mode; existing web and MCP search clients retain their cursor behavior.
+
 AWS sending remains disabled until regional sending approval and sender authentication
 are verified. Composing and saving a draft does not send it. Cloud mailboxes currently
 use the five standard folders; automatic filing, conversation history and the IMAP
