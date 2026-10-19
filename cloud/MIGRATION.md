@@ -14,8 +14,10 @@ canonical address. Exact aliases map to that same partition. Neither headers nor
 client input choose a sender or storage key. Duplicate address ownership, unknown
 IDs and configured-address changes against provisioned metadata fail closed.
 
-Use `mail-elr`, `mail-pippy`, `mail-playloudr`, `mail-robots` and `mail-lightspeed`
-for the source mailboxes. Existing `elr` and `playloudr` external IDs stay intact.
+Use `mail-elr`, `mail-playloudr`, `mail-robots` and `mail-lightspeed`
+for the active source mailboxes. The owner has retired Pippy; omit `mail-pippy`
+from the actual registry even though it remains in the generic example.
+Existing `elr` and `playloudr` external IDs stay intact.
 New Reserved mailboxes are visible only to the owner. They are not automatically
 visible to the robot reader or MCP clients. Existing grants are not changed by
 deployment, provisioning or import. The reader needs an explicit `ReaderMailboxes`
@@ -70,15 +72,21 @@ the archive. It reports message-size, attachment and MIME-draft compatibility ga
 before any destination write. Historical malware scanning is not fabricated: rows
 carry `historical_source_not_rescanned`; live SES receipt quarantine is unchanged.
 
-Two real archives verified offline on 19 October:
+All four active archives verified offline on 19 October:
 
 | Mailbox | Messages | Raw bytes | Folders | Compatibility exceptions |
 |---|---:|---:|---:|---|
 | hello@extraliferecords.com | 712 | 32,614,739 | 7 | None |
 | playloudr@extraliferecords.com | 121 | 1,622,786 | 6 | None |
+| hello@meandtherobots.com | 651 | 120,977,462 | 8 | Four server drafts; separate editable restore checked in a private DB copy |
+| hello@lightspeedruinedtamworth.co.uk | 85 | 367,523 | 5 | None |
 
-Both IMAP Drafts folders were empty. This does not prove that the other three
-mailboxes have no drafts or that local desktop drafts are absent.
+Total: 1,569 messages and 155,582,510 raw bytes. The other three IMAP Drafts folders
+are empty. The separate local desktop backup contains one pending draft. Two
+Robots messages have original MIME parser defects; their exact raw bytes remain
+preserved. The largest decoded attachment, 7,753,770 bytes, passes desktop chunk
+reassembly and SHA256 verification in an offline fixture. None of this substitutes
+for deployed readback and installed-app acceptance.
 
 ## Provision, sample import and catch-up
 
@@ -140,15 +148,28 @@ python cloud/migrate_local_drafts.py --database PRIVATE_SQLITE --source-account 
 python cloud/migrate_local_drafts.py --database PRIVATE_SQLITE --source-account SOURCE_ID --target-account cloud:mail-elr --apply
 ```
 
-An IMAP MIME draft in a later source archive is preserved as raw mail and reported
-as a compatibility exception until its editable restore is checked. Do not call
-that mailbox ready if a real draft remains stranded. The two verified sources
-have no IMAP drafts; their one pending local draft still needs an actual owner-app
-copy/restore check.
+`restore_imap_drafts.py` also restores server MIME drafts into the same editable
+local compose store. It validates the complete private archive and exact target
+address, preserves HTML, recipients (including an empty To), threading and scoped
+attachments, and uses stable source IDs to avoid duplicates. It never overwrites
+an edited or submitted target draft. Unsupported CID images or compose size limits
+fail before any write, leaving the raw source intact for deliberate conversion.
+
+```powershell
+python cloud/restore_imap_drafts.py --database PRIVATE_SQLITE --archive PRIVATE_ARCHIVE --target-account cloud:mail-robots --registry PRIVATE_REGISTRY
+python cloud/restore_imap_drafts.py --database PRIVATE_SQLITE --archive PRIVATE_ARCHIVE --target-account cloud:mail-robots --registry PRIVATE_REGISTRY --apply
+```
+
+Robots has four HTML-only server drafts, two without a recipient and none with
+attachments or CID images. The archive verifier deliberately still reports these
+as compatibility exceptions until the separate editable restore and installed-app
+checks are recorded. Do not call that mailbox ready merely because raw import or
+the helper succeeded. The one pending original local draft also needs its actual
+owner-app copy/restore check.
 
 ## Manual replies stay disabled
 
-The prepared `/human/mailboxes/{id}/send` route is a separate Lambda created only
+The source template's `/human/mailboxes/{id}/send` route is a separate Lambda created only
 when `HumanSendingEnabled=true`. It requires the owner OAuth client, owner subject,
 unexpired access token and openid scope. MCP clients cannot use it even with the
 same subject. London SES receives only exact registry-derived addresses that are
@@ -163,6 +184,16 @@ desktop integration, a controlled delivery check and operational reconciliation
 for uncertain outcomes. Existing Fasthosts and Resend outbound accounts are not
 modified by this preparation. Receive-only operation must be recorded explicitly
 before retiring any required old SMTP route.
+
+The nonexecuted 19 October preparation changeset is derived from the actual live
+transformed CloudFormation template, preserving its existing fixes. It contains
+no human-send function or route. Its new HumanSendingEnabled and recipient
+activation parameters are constrained to false and empty respectively; enabling
+either requires a separately reviewed template change. An earlier sanitized
+backup incorrectly replaced token time units; it was rejected before staging.
+The backups agent has since recaptured exact original/processed templates and
+validated them. The preparation used its own exact live template capture, also
+validated, rather than the faulty historical snapshot.
 
 ## Verification and remaining gates
 

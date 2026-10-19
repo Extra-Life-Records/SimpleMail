@@ -126,7 +126,7 @@ def inspect(root):
             unsupported.append({'id': row['id'], 'reason': 'raw_message_exceeds_native_limit'})
             continue
         parsed = service.parse(row['path'].read_bytes())
-        if any(attachment['size'] > service.MAX_ATTACHMENT for attachment in parsed['attachments']):
+        if any(attachment['size'] > service.MAX_RAW for attachment in parsed['attachments']):
             unsupported.append({'id': row['id'], 'reason': 'attachment_exceeds_client_download_limit'})
         if row['folder'] == 'Drafts' and row['present']:
             unsupported.append({'id': row['id'], 'reason': 'source_draft_preserved_as_mime_not_editable_native_draft'})
