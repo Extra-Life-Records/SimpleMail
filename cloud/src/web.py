@@ -6,7 +6,7 @@ from pathlib import Path
 
 def serve(event, context):
     name = event['rawPath'].removeprefix('/ui/')
-    types = {'index.html': 'text/html', 'app.js': 'text/javascript', 'style.css': 'text/css', 'ai.html': 'text/html', 'ai.js': 'text/javascript'}
+    types = {'index.html': 'text/html', 'app.js': 'text/javascript', 'style.css': 'text/css', 'ai.html': 'text/html', 'ai.js': 'text/javascript', 'health.js': 'text/javascript'}
     if name == 'config.json':
         body = json.dumps({'client_id': os.environ['CLIENT_ID'], 'auth_url': os.environ['AUTH_URL']})
         content_type = 'application/json'

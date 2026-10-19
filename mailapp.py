@@ -1104,6 +1104,9 @@ class Api:
         self._cloud_accounts().transport.cloud_login()
         return self._cloud_accounts().discover()
 
+    def open_cloud_owner_settings(self):
+        return self._cloud_accounts().transport.open_owner_settings()
+
     def __init__(self, cfg):
         self.cfg = cfg
         self._log_path = _BASE_DIR / "api_debug.log"

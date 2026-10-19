@@ -25,6 +25,19 @@ class CloudAdapterTests(unittest.TestCase):
     def test_public_config_does_not_return_sessions(self):
         self.adapter._save({**self.config,'refresh_token':{'windows_dpapi':'encrypted-secret'}})
         self.assertEqual(self.adapter.cloud_config(),{'configured':True})
+    def test_owner_settings_opens_fixed_url_without_unlocking_or_exporting_session(self):
+        self.adapter._save({**self.config, 'refresh_token': {'windows_dpapi': 'protected-refresh'}})
+        before = self.adapter._path.read_bytes()
+        with patch('cloud_mail.webbrowser.open', return_value=True) as launch, patch('cloud_mail.protect') as unlock:
+            self.assertEqual(self.adapter.open_owner_settings(), {'opened': True})
+            launch.assert_called_once_with(self.config['api_url'] + '/ui/ai.html')
+            unlock.assert_not_called()
+        self.assertEqual(self.adapter._path.read_bytes(), before)
+    def test_owner_settings_rejects_untrusted_saved_url(self):
+        self.adapter._save({**self.config, 'api_url': 'https://attacker.invalid'})
+        with patch('cloud_mail.webbrowser.open') as launch:
+            with self.assertRaises(ValueError): self.adapter.open_owner_settings()
+            launch.assert_not_called()
     def test_request_refresh_stays_in_backend(self):
         self.adapter._save({**self.config,'refresh_token':{'windows_dpapi':'cipher'}})
         with patch('cloud_mail.protect',return_value='refresh-secret') as unlock,patch.object(self.adapter,'_exchange',return_value={'access_token':'access-secret','expires_in':300}),patch.object(self.adapter,'_fetch',return_value={'mailboxes':[]}) as fetch:

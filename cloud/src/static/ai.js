@@ -12,8 +12,8 @@ async function accessToken() {
   const value = await response.json(); token = value.access_token; expires = Date.now() + (value.expires_in - 30) * 1000; return token;
 }
 async function request(method, path, data) {
-  const response = await fetch('/ai/' + path, {method, headers:{Authorization:'Bearer ' + await accessToken(), 'Content-Type':'application/json'}, body:data ? JSON.stringify(data) : undefined});
-  const value = await response.json(); if (!response.ok) throw Error(value.error || 'Request failed'); return value;
+  const response = await fetch(path.startsWith('/') ? path : '/ai/' + path, {method, headers:{Authorization:'Bearer ' + await accessToken(), 'Content-Type':'application/json'}, body:data ? JSON.stringify(data) : undefined});
+  const value = await response.json(); if (!response.ok) { const error = Error(value.error || 'Request failed'); error.status = response.status; throw error; } return value;
 }
 function text(tag, value) { const node = document.createElement(tag); node.textContent = value; return node; }
 function renderPermissions() {
@@ -59,6 +59,7 @@ el('permissions').onsubmit = guarded(async event => {
 el('client').onchange=renderPermissions; el('refresh').onclick=guarded(drafts);
 guarded(async()=>{
   config=await (await fetch('config.json')).json(); el('endpoint').value=location.origin+'/mcp';
+  window.SimpleMailReceivingHealth.mount(request);
   const [settings, mailboxes]=await Promise.all([request('GET','connections'),request('GET','mailboxes')]); connections=settings.connections; boxes=mailboxes.mailboxes;
   for(const client of settings.client_ids.filter(Boolean))el('client').add(new Option(client,client));
   renderPermissions(); await drafts(); status('Only the mailboxes and actions you enable are available to this AI connection.');

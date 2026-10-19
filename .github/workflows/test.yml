@@ -44,6 +44,10 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           node tests/inline_compose_browser.cjs
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          node tests/receiving_health_browser.cjs
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          node tests/account_identity_browser.cjs
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
   aws-mail:
     runs-on: ubuntu-latest
     timeout-minutes: 15
