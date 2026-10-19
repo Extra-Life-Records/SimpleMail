@@ -63,7 +63,9 @@ class CloudAccounts:
         raise ValueError('Unknown mailbox folder')
 
     def page(self, account, folder='All', query='', cursor=None):
-        params = {'folder': folder, 'q': query}
+        # Folder views collect the whole folder. Ten-row protocol defaults make
+        # an empty folder wait on dozens of round trips through unrelated mail.
+        params = {'folder': folder, 'q': query, 'limit': 10 if query else 100}
         if cursor: params['cursor'] = cursor
         return self.request(account, 'GET', '/messages?' + urlencode(params))
 
