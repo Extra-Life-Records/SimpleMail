@@ -81,8 +81,10 @@ class SetupNotificationTests(unittest.TestCase):
     def test_real_unknown_recipient_still_fails_without_mailbox_writes(self):
         item = copy.deepcopy(self.notification)
         item['mail']['messageId'] = 'real-message'
+        item['mail']['commonHeaders'] = {'messageId': 'AMAZON_SES_SETUP_NOTIFICATION'}
         item['receipt']['action']['objectKey'] = 'incoming/real-message'
-        raw = b'From: sender@example.com\r\nTo: recipient@example.com\r\n\r\nActual message'
+        raw = (b'From: sender@example.com\r\nTo: recipient@example.com\r\n'
+               b'Message-ID: AMAZON_SES_SETUP_NOTIFICATION\r\n\r\nActual message')
         self.s3.get_object.side_effect = None
         self.s3.get_object.return_value = {'ContentLength': len(raw), 'Body': io.BytesIO(raw)}
         with patch.object(service.mailboxes, 'routes', return_value={}):
