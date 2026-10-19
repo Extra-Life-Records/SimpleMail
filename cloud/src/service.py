@@ -158,6 +158,21 @@ def receive(event, context):
         key = action['objectKey']
         if not key.startswith('incoming/'):
             raise ValueError('Unexpected object prefix')
+        # SES creates this control notification when validating an S3 receipt
+        # action. The Lambda invoke policy admits only our receiving SNS topic.
+        # Match its reserved marker and complete transport shape, never MIME
+        # headers or a sender-controlled recipient, before skipping storage.
+        if (notification.get('notificationType') == 'Received'
+                and notification.get('mail', {}).get('messageId') == 'AMAZON_SES_SETUP_NOTIFICATION'
+                and notification['mail'].get('destination') == ['recipient@example.com']
+                and receipt.get('recipients') == ['recipient@example.com']
+                and key == 'incoming/AMAZON_SES_SETUP_NOTIFICATION'
+                and action.get('type') == 'S3' and action.get('objectKeyPrefix') == 'incoming/'
+                and record.get('EventSource') == 'aws:sns'
+                and record['Sns'].get('Type') == 'Notification'
+                and re.fullmatch(r'arn:[a-z0-9-]+:sns:[a-z0-9-]+:[0-9]{12}:[A-Za-z0-9_.-]+', record['Sns'].get('TopicArn', ''))
+                and action.get('topicArn') == record['Sns']['TopicArn']):
+            continue
         obj = s3.get_object(Bucket=os.environ['BUCKET'], Key=key)
         if obj['ContentLength'] > MAX_RAW:
             raise ValueError('Incoming message exceeds processing bound')
