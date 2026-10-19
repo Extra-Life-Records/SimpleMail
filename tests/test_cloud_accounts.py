@@ -87,6 +87,7 @@ class UnifiedInboxTests(unittest.TestCase):
         self.assertEqual(rows['envelopes'][0]['uid'], 'abc')
         self.assertEqual(rows['folder_unread'], 1)
         self.assertIn('cursor=next', self.transport.cloud_request.call_args.args[1])
+        self.assertIn('limit=100', self.transport.cloud_request.call_args.args[1])
 
     def test_read_and_attachment_stay_in_selected_mailbox(self):
         self.transport.cloud_request.side_effect = [

@@ -433,8 +433,13 @@ def dispatch(table, s3, ses, subject, method, path, data, query):
 def list_messages(table, s3, pk, query, unread=False, untriaged=False):
     folder = query.get('folder', 'Inbox')
     if not mailboxes.folder(folder): raise ValueError('Invalid folder')
+    requested = query.get('limit', '10')
+    if not isinstance(requested, str) or not re.fullmatch(r'[1-9][0-9]{0,2}', requested) or int(requested) > 100:
+        raise ValueError('Page size must be between 1 and 100')
+    # Full-body search may read MIME from S3, so preserve its smaller work bound.
+    page_size = min(int(requested), 10) if query.get('q') else int(requested)
     kwargs = {'KeyConditionExpression': Key('pk').eq(pk), 'IndexName': 'Chronological',
-              'ScanIndexForward': False, 'Limit': 10}
+              'ScanIndexForward': False, 'Limit': page_size}
     cursor = query.get('cursor')
     if cursor:
         # Cursor cannot choose another partition or arbitrary DynamoDB key.

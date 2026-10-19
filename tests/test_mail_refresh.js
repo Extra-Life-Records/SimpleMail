@@ -156,6 +156,36 @@ test('reply quotes escape incoming HTML outside the reader sandbox', async () =>
   assert(quote.includes('&lt;img'));
 });
 
+test('local drafts are usable before remote folder pagination finishes', async () => {
+  const a = app(), remote = deferred();
+  a.run("state.currentFolder='drafts'; state.folders=[{key:'drafts',server:'Drafts',name:'Drafts'}]");
+  a.api.list_messages = () => remote.promise;
+  a.api.list_compose_drafts = async () => [{id:'local-1',status:'pending',updated_at:'2026-10-19',
+    payload:{to:'',subject:'Ready immediately',body:'Saved work'}}];
+  const loading = a.run('loadMessages()');
+  await new Promise(setImmediate);
+  assert.equal(a.run('state.messages[0].localDraftId'), 'local-1');
+  assert.equal(a.run("$('msg-list').innerHTML"), 'Ready immediately');
+  remote.resolve(response([mail('remote')]));
+  await loading;
+  assert.equal(a.run('state.messages.length'), 2);
+  assert.equal(a.run('state.messages[0].localDraftId'), 'local-1');
+});
+
+test('late local drafts never replace a newly selected mailbox', async () => {
+  const a = app(), local = deferred(), remote = deferred();
+  a.run("state.currentFolder='drafts'; state.folders=[{key:'drafts',server:'Drafts',name:'Drafts'}]");
+  a.api.list_messages = () => remote.promise;
+  a.api.list_compose_drafts = () => local.promise;
+  const loading = a.run('loadMessages()');
+  a.run("resetMailboxView(); state.activeAccountId='b'; state.messages=[{uid:'b'}]");
+  local.resolve([{id:'old',status:'pending',updated_at:'2026-10-19',payload:{to:'',subject:'Old',body:'Saved'}}]);
+  await new Promise(setImmediate);
+  assert.equal(a.run('state.messages[0].uid'), 'b');
+  remote.resolve(response([])); await loading;
+  assert.equal(a.run('state.messages[0].uid'), 'b');
+});
+
 test('local drafts remain visible when the IMAP Drafts folder is offline', async () => {
   const a = app();
   a.run("state.currentFolder='drafts'; state.folders=[{key:'drafts',server:'Drafts',name:'Drafts'}]");

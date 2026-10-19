@@ -32,6 +32,18 @@ class MailTests(unittest.TestCase):
         return service.dispatch(self.table,self.s3,self.ses,subject,method,path,data or {},query or {})
     def assign(self,name,subject,generation='first'):
         self.table.put_item(Item={'pk':name,'sk':'META','generation':generation,'state':'Assigned','subject':subject})
+    def test_native_folder_page_size_is_bounded_without_changing_search_or_default(self):
+        for index in range(25):
+            self.table.put_item(Item={'pk':'one#first','sk':'MSG#'+str(index),'id':str(index),
+                'received':f'2026-10-19T00:00:{index:02d}Z','folder':'Inbox','seen':False,'search':'needle'})
+        default_page=self.call()
+        self.assertEqual(len(default_page['messages']),10);self.assertTrue(default_page['cursor'])
+        expanded=self.call(query={'limit':'100'})
+        self.assertEqual(len(expanded['messages']),25);self.assertIsNone(expanded['cursor'])
+        searched=self.call(query={'limit':'100','q':'needle'})
+        self.assertEqual(len(searched['messages']),10);self.assertTrue(searched['cursor'])
+        for invalid in ('0','101','-1','1.5','1000','all'):
+            with self.assertRaises(ValueError):self.call(query={'limit':invalid})
     def test_html_invitation_retains_button_and_plain_text_url(self):
         msg = EmailMessage()
         msg.set_content('<p>Join us</p><a href="https://example.com/invite?token=fixture">Accept invite</a><a href="javascript:alert(1)">Bad</a><script>hidden</script>', subtype='html')

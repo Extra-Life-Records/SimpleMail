@@ -292,6 +292,14 @@ async function selectFolder(key) {
   return loadMessages();
 }
 
+function localDraftEnvelopes(drafts) {
+  return drafts.map(draft => ({uid: "local:" + draft.id, localDraftId: draft.id,
+    sender: "Draft · " + (draft.payload.to || "No recipient"), subject: draft.payload.subject || "(no subject)",
+    date: draft.updated_at, seen: true,
+    snippet: draft.status === "pending" ? "Saved on this device · " + draft.payload.body.slice(0, 120)
+      : "Delivery needs checking · Open for details"}));
+}
+
 async function loadMessages({ quiet = false } = {}) {
   if (mailSearch) { if (!quiet) return loadSearchResults(); return; }
   const folder = state.folders.find((f) => f.key === state.currentFolder);
@@ -306,13 +314,24 @@ async function loadMessages({ quiet = false } = {}) {
     let localDrafts = [];
     let cloudError = null;
     if (folder.key === "drafts" && api.list_compose_drafts) {
+      const pendingLocal = Promise.resolve(api.list_compose_drafts(accountId)).then(drafts => {
+        if (typeof composeRecoveryDrafts === "function") drafts = composeRecoveryDrafts(accountId, drafts);
+        // Device drafts remain usable while remote folder pagination is pending.
+        // A late response must never replace another mailbox or newer refresh.
+        if (!quiet && drafts.length && view === mailboxView && request === view.requests) {
+          const scrollTop = $("msg-list").scrollTop;
+          state.messages = localDraftEnvelopes(drafts).concat(state.messages.filter(message => !message.localDraftId));
+          renderMessages();
+          $("msg-list").scrollTop = scrollTop;
+        }
+        return drafts;
+      });
       const results = await Promise.allSettled([
         folder.server ? api.list_messages(accountId, folder.server) : Promise.resolve({envelopes: [], unread: 0}),
-        api.list_compose_drafts(accountId),
+        pendingLocal,
       ]);
       if (results[1].status === "rejected") throw results[1].reason;
       localDrafts = results[1].value;
-      if (typeof composeRecoveryDrafts === "function") localDrafts = composeRecoveryDrafts(accountId, localDrafts);
       if (results[0].status === "rejected" && !localDrafts.length) throw results[0].reason;
       if (results[0].status === "rejected") cloudError = String(results[0].reason);
       res = results[0].status === "fulfilled" ? results[0].value : {envelopes: [], unread: 0};
@@ -327,11 +346,7 @@ async function loadMessages({ quiet = false } = {}) {
     }
     folder.validity = res.validity || null;
     const scrollTop = $("msg-list").scrollTop;
-    state.messages = localDrafts.map(draft => ({uid: "local:" + draft.id, localDraftId: draft.id,
-      sender: "Draft · " + (draft.payload.to || "No recipient"), subject: draft.payload.subject || "(no subject)",
-      date: draft.updated_at, seen: true,
-      snippet: draft.status === "pending" ? "Saved on this device · " + draft.payload.body.slice(0, 120)
-        : "Delivery needs checking · Open for details"})).concat(res.envelopes);
+    state.messages = localDraftEnvelopes(localDrafts).concat(res.envelopes);
     $("folder-title").textContent = folder.name;
     renderMessages();
     $("msg-list").scrollTop = scrollTop;
