@@ -185,11 +185,13 @@ def receive(event, context):
         junk = unsafe or verdicts['spamVerdict'] != 'PASS'
         routes = mailboxes.routes()
         recipients = sorted({recipient.lower() for recipient in receipt['recipients']})
-        # Exact envelope recipients only. MIME To/Cc never choose a mailbox.
+        # Exact envelope aliases win, then SES plus labels on an approved base.
+        # MIME To/Cc never choose a mailbox; retain the labelled envelope below.
         # A mismatched SES rule must surface for retry/DLQ reconciliation.
-        if any(recipient not in routes for recipient in recipients):
+        resolved = {recipient: mailboxes.resolve_recipient(recipient, routes) for recipient in recipients}
+        if any(name is None for name in resolved.values()):
             raise ValueError('Receipt contains an unconfigured recipient')
-        for name in sorted({routes[recipient] for recipient in recipients}):
+        for name in sorted(set(resolved.values())):
             mailbox = meta(table, name)
             if mailbox['state'] == 'Disabled':
                 continue
@@ -211,7 +213,7 @@ def receive(event, context):
             row = {'pk': pk, 'sk': 'MSG#' + mid, 'id': mid, 'key': key,
                    'folder': 'Junk' if junk else 'Inbox', 'seen': False,
                    'received': received, 'quarantined': unsafe,
-                   'recipients': [recipient for recipient in recipients if routes[recipient] == name],
+                   'recipients': [recipient for recipient in recipients if resolved[recipient] == name],
                    'verdicts': verdicts, 'subject': parsed['subject'][:1000],
                    'sender': parsed['sender'][:1000], 'date': parsed['date'][:100],
                    'search': search_text(parsed['subject'] + '\n' + parsed['sender'] + '\n' +
