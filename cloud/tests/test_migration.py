@@ -130,6 +130,17 @@ class MigrationTests(unittest.TestCase):
         value['final_uids'].append(3); path.write_text(json.dumps(value))
         with self.assertRaisesRegex(ValueError, 'inventory'): migration.archive(self.root)
 
+    def test_nonselectable_hierarchy_container_retains_inventory_without_message_path(self):
+        path = self.root / 'mailbox.json'; manifest = json.loads(path.read_text())
+        container = {'selectable':False,'complete':True,'message_count':0,'name':'Projects', 'wire_name_b64':'UHJvamVjdHM='}
+        manifest['folders'].append(container); path.write_text(json.dumps(manifest))
+        result = migration.inspect(self.root)
+        self.assertEqual(result['messages'], 2)
+        self.assertEqual(result['nonselectable_containers'], ['Projects'])
+        self.assertEqual(self.run_import(apply=True)['created'], 2)
+        container['message_count'] = 1; path.write_text(json.dumps(manifest))
+        with self.assertRaisesRegex(ValueError, 'Nonselectable'): migration.archive(self.root)
+
     def test_archive_paths_cannot_escape_and_uidvalidity_is_part_of_identity(self):
         with self.assertRaises(ValueError): migration.private_file(self.root, '../outside.eml')
         self.assertNotEqual(migration.source_key('source', 'folder', 1, 1), migration.source_key('source', 'folder', 2, 1))

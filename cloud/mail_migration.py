@@ -73,6 +73,13 @@ def archive(root):
     rows, folder_names, identities, names = [], [], set(), set()
     current_total = 0
     for index in manifest['folders']:
+        if index.get('selectable') is False:
+            # IMAP hierarchy containers are inventory entries, not mail folders.
+            # Keep their names in the source manifest without inventing message data.
+            if (index.get('complete') is not True or index.get('message_count') != 0 or
+                    index.get('path') or not mailboxes.folder(index.get('name'))):
+                raise ValueError('Nonselectable container must be complete and contain no messages')
+            continue
         prefix = index['path']
         folder = json.loads(private_file(root, prefix + '/folder.json').read_text(encoding='utf-8-sig'))
         if folder.get('complete') is not True or index.get('complete') is not True:
@@ -125,7 +132,8 @@ def inspect(root):
             unsupported.append({'id': row['id'], 'reason': 'source_draft_preserved_as_mime_not_editable_native_draft'})
     return {'source_id': manifest['source_id'], 'verified': True, 'messages': len(rows),
             'current_messages': manifest['message_count'], 'bytes': sum(row['size'] for row in rows),
-            'folders': folders, 'compatibility_exceptions': unsupported,
+            'folders': folders, 'nonselectable_containers': [entry['name'] for entry in manifest['folders'] if entry.get('selectable') is False],
+            'compatibility_exceptions': unsupported,
             'ready_for_cutover': False}
 
 
