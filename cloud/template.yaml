@@ -2,6 +2,22 @@ AWSTemplateFormatVersion: '2010-09-09'
 Transform: AWS::Serverless-2016-10-31
 Description: Private Extra Life Records reserved mailboxes (pilot; routing enabled separately)
 Parameters:
+  OperationalHealthConfig:
+    Type: String
+    Default: '{}'
+    Description: Operator-reviewed JSON for owner-only receiving checks. Empty disables provider reads. See cloud/OPERATIONAL_HEALTH.md.
+  OperationalHealthQueueArns:
+    Type: CommaDelimitedList
+    Default: ''
+  OperationalHealthAlarmArns:
+    Type: CommaDelimitedList
+    Default: ''
+  OperationalHealthIdentityArns:
+    Type: CommaDelimitedList
+    Default: ''
+  OperationalHealthFunctionArns:
+    Type: CommaDelimitedList
+    Default: ''
   McpEnabled:
     Type: String
     Default: 'false'
@@ -99,6 +115,7 @@ Globals:
         RECEIVE_DOMAIN: !Ref ReceiveDomain
         MAILBOX_REGISTRY: !Ref MailboxRegistry
 Conditions:
+  OperationalHealthOn: !Not [!Equals [!Ref OperationalHealthConfig, '{}']]
   HumanSendingOn: !Equals [!Ref HumanSendingEnabled, 'true']
   AdditionalRecipientsOn: !Not [!Equals [!Ref AdditionalReceiveRecipients, '']]
   McpOn: !Equals [!Ref McpEnabled, 'true']
@@ -249,11 +266,33 @@ Resources:
           CONFIGURATION_SET: !Ref SendingConfiguration
           MCP_ENABLED: !Ref McpEnabled
           OWNER_CLIENT_ID: !Ref Client
+          OPERATIONAL_HEALTH_CONFIG: !Ref OperationalHealthConfig
           MCP_CLIENT_IDS: !If [McpOn, !Join [',', [!Ref McpClient, !Ref McpSecondClient]], '']
           EXTERNAL_SECRET: !If [McpExternalOn, !Ref ExternalMailboxesSecret, '']
       Policies:
         - DynamoDBCrudPolicy: {TableName: !Ref MailTable}
         - S3CrudPolicy: {BucketName: !Ref MailBucket}
+        - !If
+          - OperationalHealthOn
+          - Statement:
+              - Effect: Allow
+                Action: sqs:GetQueueAttributes
+                Resource: !Ref OperationalHealthQueueArns
+              - Effect: Allow
+                Action: cloudwatch:DescribeAlarms
+                Resource: !Ref OperationalHealthAlarmArns
+              - Effect: Allow
+                Action: ses:GetEmailIdentity
+                Resource: !Ref OperationalHealthIdentityArns
+              - Effect: Allow
+                Action: lambda:GetFunctionConfiguration
+                Resource: !Ref OperationalHealthFunctionArns
+              - Effect: Allow
+                Action: ses:DescribeActiveReceiptRuleSet
+                Resource: '*'
+                Condition:
+                  StringEquals: {aws:RequestedRegion: !Ref 'AWS::Region'}
+          - !Ref 'AWS::NoValue'
         - !If
           - McpExternalOn
           - Statement:

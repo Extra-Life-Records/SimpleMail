@@ -186,6 +186,15 @@ function initials(s) {
 
 /* ---------------- accounts ---------------- */
 
+function accountProviderBadge(account, accounts = state.accounts) {
+  const identity = (account.identity || account.email || "").trim().toLowerCase();
+  const cloud = account.provider === "cloud";
+  const duplicated = identity && accounts.some(other => other.id !== account.id &&
+    (other.identity || other.email || "").trim().toLowerCase() === identity &&
+    (other.provider === "cloud") !== cloud);
+  return duplicated ? (cloud ? "Cloud" : "Existing mailbox") : "";
+}
+
 function renderAccounts() {
   const box = $("accounts");
   box.innerHTML = "";
@@ -201,8 +210,9 @@ function renderAccounts() {
     const btn = document.createElement("button");
     btn.className = "account" + (a.id === state.activeAccountId ? " active" : "");
     btn.title = a.identity;
+    const badge = accountProviderBadge(a);
     btn.innerHTML = `<span class="acct-dot" style="background:${escapeHtml(a.color)}"></span>
-      <span class="acct-label">${escapeHtml(a.label)}</span>`;
+      <span class="acct-label">${escapeHtml(a.label)}${badge ? `<small class="acct-provider">${badge}</small>` : ""}</span>`;
     btn.addEventListener("click", () => selectAccount(a.id));
     box.appendChild(btn);
   });
@@ -693,7 +703,8 @@ function renderAccountPicker() {
   editAccounts.forEach((a, i) => {
     const opt = document.createElement("option");
     opt.value = String(i);
-    opt.textContent = (a.label || a.email || "New account") + (a.from_email ? ` — sends as ${a.from_email}` : "");
+    const badge = accountProviderBadge(a, editAccounts);
+    opt.textContent = (a.label || a.email || "New account") + (badge ? ` — ${badge}` : "") + (a.from_email ? ` — sends as ${a.from_email}` : "");
     sel.appendChild(opt);
   });
   sel.value = String(editIndex);
@@ -780,6 +791,7 @@ async function openSettings() {
   $("set-version").textContent = cfg.version || "?";
   showAccountForm(activeIdx >= 0 ? activeIdx : 0);
   $("cloud-reconnect").hidden = !cfg.cloud_configured;
+  $("cloud-owner-settings").hidden = !cfg.cloud_configured;
   $("settings-backdrop").classList.add("show");
 }
 
@@ -892,6 +904,12 @@ async function init() {
   $("cancel-btn").addEventListener("click", discardCompose);
   $("settings-btn").addEventListener("click", openSettings);
   $("cloud-settings").addEventListener("click", openSettings);
+  $("cloud-owner-settings").addEventListener("click", async () => {
+    try {
+      const result = await api.open_cloud_owner_settings();
+      toast(result.opened ? "Owner settings opened in your browser. Sign in there if asked." : "The browser could not open owner settings.", !result.opened);
+    } catch (e) { toast(String(e), true); }
+  });
   $("cloud-reconnect").addEventListener("click", async () => {
     $("cloud-reconnect").disabled = true;
     toast("Complete sign-in in your browser, then return here.");

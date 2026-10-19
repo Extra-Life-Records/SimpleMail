@@ -75,6 +75,14 @@ class CloudMail:
     def cloud_config(self):
         return {'configured': bool(self._read().get('api_url'))}
 
+    def open_owner_settings(self):
+        """Open the fixed owner page without exporting or unlocking a session."""
+        with self._lock:
+            config = self._read()
+            self.validate(config)
+            url = config['api_url'] + '/ui/ai.html'
+        return {'opened': bool(webbrowser.open(url))}
+
     def cloud_configure(self, config):
         self.validate(config)
         with self._lock:
