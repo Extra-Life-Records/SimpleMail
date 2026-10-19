@@ -10,7 +10,7 @@ from unittest.mock import patch
 from compose_store import ComposeStore
 from mail_attachments import AttachmentStore
 
-spec = importlib.util.spec_from_file_location('restore_imap', Path(__file__).parents[1] / 'cloud' / 'restore_imap_drafts.py')
+spec = importlib.util.spec_from_file_location('restore_imap', Path(__file__).parents[2] / 'cloud' / 'restore_imap_drafts.py')
 restore = importlib.util.module_from_spec(spec); spec.loader.exec_module(restore)
 
 
