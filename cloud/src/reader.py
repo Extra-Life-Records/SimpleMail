@@ -7,8 +7,9 @@ can never send. Scope mail-reader/read reads. Scope mail-reader/triage also lets
 it move mail between Inbox and Junk, tag a message with a triage result, and
 save new drafts for the owner to review. It never changes read state.
 
-The robot sees Reserved (unassigned) mailboxes plus Assigned ones the owner
-names in READER_MAILBOXES; never Disabled ones. The owner's Fasthosts mailboxes
+The robot sees the original five Reserved mailboxes plus additional/Assigned ones
+the owner names in READER_MAILBOXES; never Disabled ones. New native mailbox
+provisioning does not grant robot access. The owner's Fasthosts mailboxes
 are served the same way by external.py, using logins only AWS can read.
 """
 import base64
@@ -35,13 +36,14 @@ def clients():
 
 
 def named():
-    return {name.strip() for name in os.environ.get('READER_MAILBOXES', '').split(',')} & set(NAMES)
+    return {name.strip() for name in os.environ.get('READER_MAILBOXES', '').split(',')} & set(service.mailbox_names())
 
 
 def visible(table, name):
     item = service.meta(table, name)
     # Re-read on every request: assigning an employee removes their inbox at once.
-    if item['state'] == 'Reserved' or (item['state'] == 'Assigned' and name in named()):
+    if (name in NAMES and item['state'] == 'Reserved') or (
+            item['state'] in ('Reserved', 'Assigned') and name in named()):
         return item
     raise Denied('Mailbox is not available to the reader')
 
@@ -118,17 +120,17 @@ def dispatch(table, s3, method, path, query, data=None, scopes=(READ,), imap_ope
         raise ValueError('Unknown endpoint')
     if len(parts) == 2 and method == 'GET':
         items = []
-        for name in NAMES:
+        for name in service.mailbox_names():
             try:
                 item = visible(table, name)
             except Denied:
                 continue
-            items.append({'name': name, 'address': name + '@' + os.environ['DOMAIN'], 'state': item['state']})
+            items.append({'name': name, 'address': service.mailbox_address(name), 'state': item['state']})
         items += [{'name': name, 'address': account['address'], 'state': 'External', 'provider': 'imap'}
                   for name, account in external.accounts().items()]
         return {'mailboxes': items}
     if len(parts) < 4: raise ValueError('Unknown endpoint')
-    if parts[2] not in NAMES:
+    if parts[2] not in service.mailbox_names():
         account = external.accounts().get(parts[2])
         if not account: raise Denied('Mailbox is not available to the reader')
         return external.dispatch(table, account, parts[2], method, parts[3:], query, data, imap_opener)

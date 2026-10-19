@@ -10,6 +10,11 @@ Parameters:
     Type: String
     Default: 'false'
     AllowedValues: ['true', 'false']
+  HumanSendingEnabled:
+    Type: String
+    Default: 'false'
+    AllowedValues: ['true', 'false']
+    Description: Separate manual-owner London SES route. Leave disabled until explicitly authorized and sender identities verified.
   McpResourceUrl:
     Type: String
     Default: https://localhost.invalid/mcp
@@ -31,6 +36,15 @@ Parameters:
   ReceiveDomain:
     Type: String
     Default: inbox.playloudr.com
+  MailboxRegistry:
+    Type: String
+    Default: '{}'
+    Description: Reviewed exact-address JSON mapping for additional mail-* IDs and reserved aliases. Does not provision mailboxes or grant AI access.
+  AdditionalReceiveRecipients:
+    Type: String
+    Default: ''
+    AllowedPattern: '^([^\s,@]+@[^\s,@]+(,[^\s,@]+@[^\s,@]+)*)?$'
+    Description: Optional exact recipient addresses for a separate SES rule; verify domains and registry before activation. Empty preserves current receipt rules.
   AuthDomain:
     Type: String
     Description: Unique Cognito hosted login prefix
@@ -63,8 +77,8 @@ Parameters:
   ReaderMailboxes:
     Type: String
     Default: ''
-    AllowedPattern: '^[a-z,]*$'
-    Description: Assigned mailboxes the reader may also read, comma separated (e.g. two,three). Unassigned ones are always readable.
+    AllowedPattern: '^[a-z0-9,-]*$'
+    Description: Explicit additional or assigned mailbox IDs the reader may read. Only the original five Reserved inboxes are automatically readable.
   ExternalMailboxesSecret:
     Type: String
     Default: ''
@@ -83,7 +97,10 @@ Globals:
         BUCKET: !Ref MailBucket
         DOMAIN: !Ref Domain
         RECEIVE_DOMAIN: !Ref ReceiveDomain
+        MAILBOX_REGISTRY: !Ref MailboxRegistry
 Conditions:
+  HumanSendingOn: !Equals [!Ref HumanSendingEnabled, 'true']
+  AdditionalRecipientsOn: !Not [!Equals [!Ref AdditionalReceiveRecipients, '']]
   McpOn: !Equals [!Ref McpEnabled, 'true']
   McpExternalOn: !And [!Condition McpOn, !Not [!Equals [!Ref ExternalMailboxesSecret, '']]]
   ReserveApiCapacity: !Not [!Equals [!Ref ApiReservedConcurrency, 0]]
@@ -262,6 +279,45 @@ Resources:
         Root: {Type: HttpApi, Properties: {ApiId: !Ref HttpApi, Path: /mailboxes, Method: GET}}
         Mail: {Type: HttpApi, Properties: {ApiId: !Ref HttpApi, Path: '/mailboxes/{proxy+}', Method: ANY}}
         AiSettings: {Type: HttpApi, Properties: {ApiId: !Ref HttpApi, Path: '/ai/{proxy+}', Method: ANY}}
+  HumanSendFunction:
+    Type: AWS::Serverless::Function
+    Condition: HumanSendingOn
+    Properties:
+      Handler: human_send.api
+      MemorySize: 512
+      Environment:
+        Variables:
+          HUMAN_SENDING_ENABLED: !Ref HumanSendingEnabled
+          OWNER_CLIENT_ID: !Ref Client
+          HUMAN_SENDER_ADDRESSES: 'hello@extraliferecords.com,pippy@extraliferecords.com,playloudr@extraliferecords.com,hello@meandtherobots.com,hello@lightspeedruinedtamworth.co.uk'
+      Policies:
+        - Statement:
+            - Effect: Allow
+              Action: [dynamodb:GetItem, dynamodb:Query]
+              Resource: [!GetAtt MailTable.Arn, !Sub '${MailTable.Arn}/index/*']
+            - Effect: Allow
+              Action: [dynamodb:PutItem, dynamodb:UpdateItem]
+              Resource: !GetAtt MailTable.Arn
+              Condition:
+                ForAllValues:StringLike:
+                  dynamodb:LeadingKeys: ['mail-*#*']
+            - Effect: Allow
+              Action: s3:GetObject
+              Resource: !Sub '${MailBucket.Arn}/*'
+            - Effect: Allow
+              Action: s3:PutObject
+              Resource: !Sub '${MailBucket.Arn}/sent/*'
+            - Effect: Allow
+              Action: ses:SendEmail
+              Resource:
+                - !Sub 'arn:aws:ses:eu-west-2:${AWS::AccountId}:identity/extraliferecords.com'
+                - !Sub 'arn:aws:ses:eu-west-2:${AWS::AccountId}:identity/meandtherobots.com'
+                - !Sub 'arn:aws:ses:eu-west-2:${AWS::AccountId}:identity/lightspeedruinedtamworth.co.uk'
+              Condition:
+                StringEquals:
+                  ses:FromAddress: ['hello@extraliferecords.com', 'pippy@extraliferecords.com', 'playloudr@extraliferecords.com', 'hello@meandtherobots.com', 'hello@lightspeedruinedtamworth.co.uk']
+      Events:
+        Send: {Type: HttpApi, Properties: {ApiId: !Ref HttpApi, Path: '/human/mailboxes/{proxy+}', Method: POST}}
   WebFunction:
     Type: AWS::Serverless::Function
     Properties:
@@ -383,7 +439,7 @@ Resources:
               Resource: !GetAtt MailTable.Arn
               Condition:
                 ForAllValues:StringLike:
-                  dynamodb:LeadingKeys: ['AI#*', 'APPROVAL#*', 'external#*', 'one#*', 'two#*', 'three#*', 'four#*', 'five#*']
+                  dynamodb:LeadingKeys: ['AI#*', 'APPROVAL#*', 'external#*', 'one#*', 'two#*', 'three#*', 'four#*', 'five#*', 'mail-*#*']
             - Effect: Allow
               Action: s3:GetObject
               Resource: !Sub '${MailBucket.Arn}/*'
@@ -460,7 +516,7 @@ Resources:
               Resource: [!GetAtt MailTable.Arn, !Sub '${MailTable.Arn}/index/*']
               Condition:
                 ForAllValues:StringLike:
-                  dynamodb:LeadingKeys: [one, two, three, four, five, 'one#*', 'two#*', 'three#*', 'four#*', 'five#*', 'external#*']
+                  dynamodb:LeadingKeys: [one, two, three, four, five, 'one#*', 'two#*', 'three#*', 'four#*', 'five#*', 'external#*', 'mail-*']
             # Mail rows only: partition keys are mailbox#generation or external#name.
             # META, ADMIN and RECEIPT records stay out of reach. No DeleteItem.
             - Effect: Allow
@@ -468,7 +524,7 @@ Resources:
               Resource: !GetAtt MailTable.Arn
               Condition:
                 ForAllValues:StringLike:
-                  dynamodb:LeadingKeys: ['one#*', 'two#*', 'three#*', 'four#*', 'five#*', 'external#*']
+                  dynamodb:LeadingKeys: ['one#*', 'two#*', 'three#*', 'four#*', 'five#*', 'external#*', 'mail-*#*']
             - Effect: Allow
               Action: s3:GetObject
               Resource: !Sub '${MailBucket.Arn}/*'
@@ -550,6 +606,20 @@ Resources:
   ReceiveIdentity:
     Type: AWS::SES::EmailIdentity
     Properties: {EmailIdentity: !Ref ReceiveDomain}
+  AdditionalReceiptRule:
+    Type: AWS::SES::ReceiptRule
+    Condition: AdditionalRecipientsOn
+    DependsOn: [MailBucketPolicy, ReceiveTopicPolicy]
+    Properties:
+      RuleSetName: !Ref Rules
+      Rule:
+        Name: simplemail-migrated
+        Enabled: true
+        ScanEnabled: true
+        TlsPolicy: Require
+        Recipients: !Split [',', !Ref AdditionalReceiveRecipients]
+        Actions:
+          - S3Action: {BucketName: !Ref MailBucket, ObjectKeyPrefix: incoming/, TopicArn: !Ref ReceiveTopic}
   SendingConfiguration:
     Type: AWS::SES::ConfigurationSet
   SendingIdentity:

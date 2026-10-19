@@ -15,7 +15,7 @@ import ai_access as access
 @mock_aws
 class AccessTests(unittest.TestCase):
     def setUp(self):
-        env = patch.dict(os.environ, AWS_DEFAULT_REGION='eu-west-1', TABLE='mail', BUCKET='mail-testing', DOMAIN='extraliferecords.com', EXTERNAL_SECRET='', MCP_CLIENT_IDS='clientA,clientB', AI_SENDING_ENABLED='true', SENDING_ENABLED='true', CONFIGURATION_SET='')
+        env = patch.dict(os.environ, AWS_DEFAULT_REGION='eu-west-1', TABLE='mail', BUCKET='mail-testing', DOMAIN='extraliferecords.com', RECEIVE_DOMAIN='inbox.playloudr.com', EXTERNAL_SECRET='', MCP_CLIENT_IDS='clientA,clientB', AI_SENDING_ENABLED='true', SENDING_ENABLED='true', CONFIGURATION_SET='')
         env.start(); self.addCleanup(env.stop)
         boto3.client('dynamodb').create_table(TableName='mail', BillingMode='PAY_PER_REQUEST', AttributeDefinitions=[{'AttributeName': k, 'AttributeType': 'S'} for k in ('pk', 'sk')], KeySchema=[{'AttributeName':'pk','KeyType':'HASH'},{'AttributeName':'sk','KeyType':'RANGE'}])
         boto3.client('s3').create_bucket(Bucket='mail-testing', CreateBucketConfiguration={'LocationConstraint':'eu-west-1'})

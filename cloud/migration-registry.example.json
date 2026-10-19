@@ -1,0 +1,12 @@
+{
+  "one": {"aliases": ["dizzyteapot@extraliferecords.com"]},
+  "two": {"aliases": []},
+  "three": {"aliases": []},
+  "four": {"aliases": []},
+  "five": {"aliases": []},
+  "mail-elr": {"address": "hello@extraliferecords.com"},
+  "mail-pippy": {"address": "pippy@extraliferecords.com"},
+  "mail-playloudr": {"address": "playloudr@extraliferecords.com"},
+  "mail-robots": {"address": "hello@meandtherobots.com"},
+  "mail-lightspeed": {"address": "hello@lightspeedruinedtamworth.co.uk"}
+}

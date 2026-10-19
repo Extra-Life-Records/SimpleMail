@@ -22,7 +22,7 @@ def scope(permission):
 FIELDS = {
     'mailbox': {'type': 'string', 'description': 'Mailbox name returned by mailboxes'},
     'message_id': {'type': 'string'}, 'part': {'type': 'integer', 'minimum': 0},
-    'folder': {'type': 'string', 'enum': ['Inbox', 'Sent', 'Drafts', 'Junk', 'Trash', 'All']},
+    'folder': {'type': 'string', 'maxLength': 500, 'description': 'Exact folder name, or All to include every folder'},
     'query': {'type': 'string', 'maxLength': 1000}, 'cursor': {'type': 'string'},
     'unread': {'type': 'boolean'}, 'request_id': {'type': 'string', 'minLength': 16, 'maxLength': 80},
     'to': {'type': 'string'}, 'cc': {'type': 'string'}, 'subject': {'type': 'string'}, 'body': {'type': 'string'},

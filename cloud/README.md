@@ -1,5 +1,9 @@
 # Extra Life Records reserved mailbox pilot
 
+The additive Fasthosts migration preparation is documented in [MIGRATION.md](MIGRATION.md).
+It preserves the original inboxes and grants and defaults all new routing/sending off.
+Preparation is not deployment or migration acceptance.
+
 **Receiving pilot deployed; not ready for employee use.** This branch implements
 the AWS backend, web inbox and SimpleMail provider window. Five reserved inboxes
 received real Gmail tests with attachments. Public forwarding and owner web login

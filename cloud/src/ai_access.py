@@ -34,9 +34,9 @@ def identifier(value):
 
 
 def owner_mailbox(table, subject, name):
-    if name in service.NAMES:
+    if name in service.mailbox_names():
         item = service.authorize(table, name, subject)
-        return {'name': name, 'address': name + '@' + os.environ['DOMAIN'], 'generation': item['generation'], 'item': item}
+        return {'name': name, 'address': service.mailbox_address(name), 'generation': item['generation'], 'item': item}
     admin = table.get_item(Key={'pk': 'ADMIN', 'sk': subject}, ConsistentRead=True).get('Item')
     account = external.accounts().get(name) if admin and admin.get('enabled') else None
     if not account: raise Denied('Mailbox is not assigned to this account')
@@ -220,7 +220,7 @@ def owner_dispatch(table, s3, subject, method, path, data):
         return {'saved': True}
     if tail == ['mailboxes'] and method == 'GET':
         items = []
-        for name in [*service.NAMES, *external.accounts().keys()]:
+        for name in [*service.mailbox_names(), *external.accounts().keys()]:
             try:
                 box = owner_mailbox(table, subject, name); items.append({'name': name, 'address': box['address']})
             except Denied: pass

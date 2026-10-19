@@ -1,4 +1,6 @@
 import inspect
+import hashlib
+import base64
 import tempfile
 import unittest
 from pathlib import Path
@@ -96,9 +98,30 @@ class UnifiedInboxTests(unittest.TestCase):
         for call in self.transport.cloud_request.call_args_list:
             self.assertTrue(call.args[1].startswith('/mailboxes/two/messages/abc'))
         self.transport.cloud_request.side_effect = None
-        self.transport.cloud_request.return_value = {'name':'a.txt','data':'YQ=='}
+        self.transport.cloud_request.return_value = {'name':'a.txt','data':'YQ==','size':1,'offset':0,'next_offset':None,'sha256':hashlib.sha256(b'a').hexdigest()}
         self.transport.cloud_save_attachment.return_value = {'path':'selected/a.txt'}
         self.assertEqual(self.api.save_attachment('cloud:two','Inbox','abc',2)['path'], 'selected/a.txt')
+
+    def test_attachment_chunks_validate_checksum_and_never_cross_mailbox(self):
+        data = b'first second'; digest = hashlib.sha256(data).hexdigest()
+        self.transport.cloud_request.side_effect = [
+            {'name':'large.dat','data':base64.b64encode(data[:5]).decode(),'size':len(data),'offset':0,'next_offset':5,'sha256':digest},
+            {'name':'large.dat','data':base64.b64encode(data[5:]).decode(),'size':len(data),'offset':5,'next_offset':None,'sha256':digest}]
+        result = self.provider.attachment_file('cloud:two', 'abc', 2)
+        self.assertEqual(base64.b64decode(result['data']), data)
+        for call in self.transport.cloud_request.call_args_list:
+            self.assertTrue(call.args[1].startswith('/mailboxes/two/messages/abc/downloads/2'))
+        self.transport.cloud_request.side_effect = None
+        self.transport.cloud_request.return_value = {'name':'a.txt','data':'YQ==','size':1,'offset':0,'next_offset':None,'sha256':'bad'}
+        with self.assertRaisesRegex(ValueError, 'checksum'): self.provider.attachment_file('cloud:two', 'abc', 2)
+
+    def test_custom_folder_discovery_retains_case_and_queries_selected_mailbox(self):
+        self.transport.cloud_request.return_value = {'mailboxes':[{'name':'mail-elr','address':'hello@extraliferecords.com','state':'Reserved','folders':['Inbox','Marketing','Sent Messages']}]}
+        self.provider.discover()
+        self.assertEqual([item['server'] for item in self.provider.get_folders('cloud:mail-elr')['folders']], ['Inbox','Marketing','Sent Messages'])
+        self.transport.cloud_request.return_value = {'messages':[], 'cursor':None}
+        self.provider.list_messages('cloud:mail-elr', 'Sent Messages')
+        self.assertIn('folder=Sent+Messages', self.transport.cloud_request.call_args.args[1])
 
     def test_invalid_message_path_never_reaches_transport(self):
         self.transport.reset_mock()
