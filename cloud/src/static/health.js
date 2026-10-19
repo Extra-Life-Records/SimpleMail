@@ -28,7 +28,9 @@ window.SimpleMailReceivingHealth = (() => {
         if (check.kind === 'rules' && check.rules) value = check.rules.map(r => `${r.name}: ${r.enabled === true ? 'enabled' : r.enabled === false ? 'disabled' : 'unknown'} (${r.status})`).join('; ');
         if (check.kind === 'sending' && check.flags) {
           const combine = flags => flags.includes('unknown') || flags.some(v => !v) ? 'unknown' : flags.every(v => v === 'enabled') ? 'enabled' : 'disabled';
-          value = `Manual: ${check.flags.manual || 'unknown'}; AI: ${combine([check.flags.ai, check.flags.ai_transport])}; other mailbox sending: ${check.flags.general || 'unknown'}`;
+          const manual = [check.flags.general, check.flags.manual];
+          const manualState = manual.includes('enabled') ? 'enabled' : manual.every(v => v === 'disabled') ? 'disabled' : 'unknown';
+          value = `Manual: ${manualState}; AI: ${combine([check.flags.ai, check.flags.ai_transport])}`;
           if (Object.values(check.flags).some(v => v === 'enabled')) value += ' — a sending control is enabled; review required';
         }
         if (check.detail) value = check.detail;

@@ -4,7 +4,7 @@ Native SimpleMail: **Settings → Receiving health and owner settings** opens th
 
 `GET /mailboxes/operational-health` requires an unexpired access token from `OWNER_CLIENT_ID` and a fresh, consistent `ADMIN/<subject>` record with `enabled: true`. Employee assignments, mailbox grants and Codex/Claude client tokens do not grant access. It creates no AI tool or permissions.
 
-The view reads only two failure queue counts, two metric alarm states, configured SES identity/DKIM status, the active ordered receipt rules, and the actual sending switches. API general sending is read in-process; manual sending is read from Delivery, and both AI controls from MCP. Provider details, environment contents, queue bodies, subscriber addresses and mail are never returned.
+The view reads only two failure queue counts, two metric alarm states, configured SES identity/DKIM status, the active ordered receipt rules, and the actual sending switches. API general and separate manual sending controls are read in-process, and both AI controls from MCP. These are cloud controls; unchanged legacy SMTP accounts are outside this view. Provider details, environment contents, queue bodies, subscriber addresses and mail are never returned.
 
 An empty queue is not proof of delivery. Disabled migration routing explicitly says imported history does not confirm new mail delivery. Pending identities/rules remain pending; drift or queue/alarm failures need attention; unavailable/missing observations are unknown. No check sets `delivery_verified` to true. This view does not verify public MX, quarantine contents, successful live delivery, alarm notifications, free-plan continuity or bills.
 
@@ -12,7 +12,9 @@ The browser refreshes every five minutes **only while open and visible**, with m
 
 ## Deployment scope
 
-The source SAM template defaults `OperationalHealthConfig` to `{}` and makes the additional IAM policy opt-in. Configure bounded `queues` (label/url), `alarms` (label/name), `domains`, `rule_set`, `rules` (name/label/recipients/migration), `topic_arn`, `mcp_function` and `delivery_function` values. Empty or malformed configuration returns unknown without provider reads. No mailbox content belongs in this configuration.
+The sending mapping above describes the current migration deployment. The source SAM also contains a conditional, separate `HumanSendFunction` which is absent from that live deployment. Enabling that future route requires extending the health checks to observe its actual runtime before treating the view as complete coverage.
+
+The source SAM template defaults `OperationalHealthConfig` to `{}` and makes the additional IAM policy opt-in. Configure bounded `queues` (label/url), `alarms` (label/name), `domains`, `rule_set`, `rules` (name/label/recipients/migration), `topic_arn`, `mcp_function` values. Empty or malformed configuration returns unknown without provider reads. No mailbox content belongs in this configuration.
 
 The API role additionally needs only:
 
@@ -21,7 +23,7 @@ The API role additionally needs only:
 | `sqs:GetQueueAttributes` | The two failure queues |
 | `cloudwatch:DescribeAlarms` | The two metric alarms |
 | `ses:GetEmailIdentity` | The four receiving identities |
-| `lambda:GetFunctionConfiguration` | Delivery and MCP functions |
+| `lambda:GetFunctionConfiguration` | The MCP function |
 | `ses:DescribeActiveReceiptRuleSet` | `*`, restricted by `aws:RequestedRegion` |
 
 SES does not provide a resource type for `DescribeActiveReceiptRuleSet`; its wildcard is necessary for this single read operation. See the [SES authorization reference](https://docs.aws.amazon.com/service-authorization/latest/reference/list_ses.html) and [SES v2 identity authorization reference](https://docs.aws.amazon.com/service-authorization/latest/reference/list_sesv2.html).

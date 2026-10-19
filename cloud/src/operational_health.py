@@ -27,7 +27,7 @@ def snapshot(client_factory=None):
         assert isinstance(config, dict)
         assert len(config.get('queues', [])) == 2 and len(config.get('alarms', [])) == 2
         assert 1 <= len(config.get('domains', [])) <= 10 and 1 <= len(config.get('rules', [])) <= 10
-        assert config.get('rule_set') and config.get('mcp_function') and config.get('delivery_function') and config.get('topic_arn')
+        assert config.get('rule_set') and config.get('mcp_function') and config.get('topic_arn')
         assert all(isinstance(row, dict) and row.get('label') and row.get('url') for row in config['queues'])
         assert all(isinstance(row, dict) and row.get('label') and row.get('name') for row in config['alarms'])
         assert all(isinstance(name, str) and name for name in config['domains'])
@@ -100,9 +100,8 @@ def snapshot(client_factory=None):
 
     def sending():
         variables = clients['lambda'].get_function_configuration(FunctionName=config['mcp_function']).get('Environment', {}).get('Variables', {})
-        delivery = clients['lambda'].get_function_configuration(FunctionName=config['delivery_function']).get('Environment', {}).get('Variables', {})
         flags = {'general': flag(os.environ.get('SENDING_ENABLED')),
-                 'manual': flag(delivery.get('HUMAN_SENDING_ENABLED')),
+                 'manual': flag(os.environ.get('HUMAN_SENDING_ENABLED')),
                  'ai': flag(variables.get('AI_SENDING_ENABLED')),
                  'ai_transport': flag(variables.get('SENDING_ENABLED'))}
         status = 'attention' if 'enabled' in flags.values() else ('unknown' if 'unknown' in flags.values() else 'clear')
@@ -111,7 +110,7 @@ def snapshot(client_factory=None):
     jobs = [('queue', row['label'], lambda row=row: queue(row)) for row in config['queues']]
     jobs += [('alarm', row['label'], lambda row=row: alarm(row)) for row in config['alarms']]
     jobs += [('domain', name, lambda name=name: domain(name)) for name in config['domains']]
-    jobs += [('rules', 'Receiving routes', rules), ('sending', 'Sending', sending)]
+    jobs += [('rules', 'Receiving routes', rules), ('sending', 'Cloud sending', sending)]
     with ThreadPoolExecutor(max_workers=4) as pool:
         checks = list(pool.map(lambda job: observe(*job), jobs))
     states = {item['status'] for item in checks}

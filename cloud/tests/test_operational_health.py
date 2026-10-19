@@ -14,7 +14,7 @@ import service
 
 CONFIG = {'queues': [{'label': 'Receiver failures', 'url': 'queue-1'}, {'label': 'Notification failures', 'url': 'queue-2'}],
           'alarms': [{'label': 'Receiver alarm', 'name': 'alarm-1'}, {'label': 'Notification alarm', 'name': 'alarm-2'}],
-          'domains': ['example.com'], 'rule_set': 'rules', 'topic_arn': 'topic', 'mcp_function': 'mcp', 'delivery_function': 'delivery',
+          'domains': ['example.com'], 'rule_set': 'rules', 'topic_arn': 'topic', 'mcp_function': 'mcp',
           'rules': [{'name': 'original', 'recipients': ['one@example.com']}]}
 
 
@@ -127,12 +127,12 @@ class SnapshotTests(unittest.TestCase):
         result = self.snapshot(); self.assertEqual(result['status'], 'unknown')
         self.assertEqual(next(r for r in result['checks'] if r['kind'] == 'sending')['flags']['ai'], 'unknown')
 
-    def test_manual_switch_reads_delivery_runtime_not_an_api_copy(self):
-        self.clients['lambda'].get_function_configuration.side_effect = lambda FunctionName: {'Environment': {'Variables': (
-            {'HUMAN_SENDING_ENABLED': 'true'} if FunctionName == 'delivery' else {'AI_SENDING_ENABLED': 'false', 'SENDING_ENABLED': 'false'})}}
-        result = self.snapshot()
+    def test_manual_switch_reads_current_api_runtime_without_delivery_access(self):
+        with patch.dict(os.environ, HUMAN_SENDING_ENABLED='true'):
+            result = self.snapshot()
         self.assertEqual(result['status'], 'attention')
         self.assertEqual(next(r for r in result['checks'] if r['kind'] == 'sending')['flags']['manual'], 'enabled')
+        self.clients['lambda'].get_function_configuration.assert_called_once_with(FunctionName='mcp')
 
     def test_unconfigured_or_invalid_config_never_calls_aws(self):
         for value in ('{}', '[]', '{broken', json.dumps({**CONFIG, 'queues': [None, None]})):

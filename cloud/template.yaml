@@ -266,6 +266,7 @@ Resources:
           CONFIGURATION_SET: !Ref SendingConfiguration
           MCP_ENABLED: !Ref McpEnabled
           OWNER_CLIENT_ID: !Ref Client
+          HUMAN_SENDING_ENABLED: !Ref HumanSendingEnabled
           OPERATIONAL_HEALTH_CONFIG: !Ref OperationalHealthConfig
           MCP_CLIENT_IDS: !If [McpOn, !Join [',', [!Ref McpClient, !Ref McpSecondClient]], '']
           EXTERNAL_SECRET: !If [McpExternalOn, !Ref ExternalMailboxesSecret, '']

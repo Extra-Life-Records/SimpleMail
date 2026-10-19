@@ -22,7 +22,7 @@ const path = require('node:path');
       {kind: 'queue', name: 'Receiver failures', status: 'clear', counts: {visible: 0, in_flight: 0, delayed: 0}},
       {kind: 'domain', name: 'example.com', status: 'pending', verification: 'PENDING', dkim: 'PENDING'},
       {kind: 'rules', name: 'Receiving routes', status: 'pending', rules: [{name: 'Existing AWS inboxes', enabled: true, status: 'clear'}, {name: 'Migrated mailboxes', enabled: false, status: 'pending'}], migration_notice: 'Migration receiving is not activated. Imported history does not confirm new mail delivery.'},
-      {kind: 'sending', name: 'Sending', status: 'clear', flags: {general: 'disabled', manual: 'disabled', ai: 'disabled', ai_transport: 'disabled'}}]};
+      {kind: 'sending', name: 'Cloud sending', status: 'clear', flags: {general: 'disabled', manual: 'disabled', ai: 'disabled', ai_transport: 'disabled'}}]};
     let value = pending, status = 200;
     await page.addInitScript(() => sessionStorage.setItem('refresh', 'fixture-only'));
     await page.route('**/config.json', route => route.fulfill({json: {auth_url: 'https://fixture.amazoncognito.com', client_id: 'owner'}}));
@@ -39,7 +39,7 @@ const path = require('node:path');
     await page.goto('http://127.0.0.1:' + server.address().port + '/ui/ai.html');
     await page.getByText('Receiving setup is pending', {exact: true}).waitFor();
     await page.getByText(pending.checks[2].migration_notice, {exact: true}).waitFor();
-    assert.match(await page.locator('#health-details').innerText(), /Sending: Manual: disabled; AI: disabled/);
+    assert.match(await page.locator('#health-details').innerText(), /Cloud sending: Manual: disabled; AI: disabled/);
     if (process.env.SIMPLEMAIL_HEALTH_SCREENSHOT) await page.screenshot({path: process.env.SIMPLEMAIL_HEALTH_SCREENSHOT, fullPage: true});
     value = {...pending, status: 'attention', checks: [{kind: 'queue', name: '<img src=x onerror=alert(1)>', status: 'attention', counts: {visible: 1, in_flight: 0, delayed: 0}}]};
     await page.locator('#health-refresh').click(); await page.getByText('Receiving needs attention', {exact: true}).waitFor();
