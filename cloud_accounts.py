@@ -65,7 +65,8 @@ class CloudAccounts:
     def page(self, account, folder='All', query='', cursor=None):
         # Folder views collect the whole folder. Ten-row protocol defaults make
         # an empty folder wait on dozens of round trips through unrelated mail.
-        params = {'folder': folder, 'q': query, 'limit': 10 if query else 100}
+        params = {'folder': folder, 'q': query, 'limit': 100}
+        if query: params['search_mode'] = 'indexed'
         if cursor: params['cursor'] = cursor
         return self.request(account, 'GET', '/messages?' + urlencode(params))
 
@@ -109,7 +110,8 @@ class CloudAccounts:
                     items.insert(0, {'uid': 'local:' + draft['id'], 'localDraftId': draft['id'],
                                     'sender': 'Draft · ' + payload['to'], 'subject': payload['subject'],
                                     'date': draft['updated_at'], 'seen': True, 'snippet': 'Drafts'})
-        return {'items': items, 'next_cursor': page.get('cursor')}
+        return {'items': items, 'next_cursor': page.get('cursor'),
+                'search_progress': page.get('search_progress')}
 
     def get_message(self, account, folder, uid, validity=None):
         row = self.request(account, 'GET', self.mid(uid))

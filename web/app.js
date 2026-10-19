@@ -48,7 +48,8 @@ function queueMailSearch() {
   if (!query) return loadMessages();
   const folder = state.folders.find(f => f.key === state.currentFolder);
   mailSearch = {query, serverFolder:['junk','trash'].includes(folder?.key) ? folder.server : null,
-                cursor:null, busy:false, items:[], error:null};
+                cursor:null, busy:false, items:[], error:null, paused:false,
+                cloud:activeAccount()?.provider === 'cloud', scanned:{index:0, body:0}, phase:null};
   state.messages = [];
   $("folder-title").textContent = 'Search results';
   $("markall-btn").disabled = true;
@@ -63,19 +64,36 @@ async function loadSearchResults(more = false) {
   const view = mailboxView;
   const accountId = state.activeAccountId;
   search.busy = true;
+  search.paused = false;
   search.error = null;
+  if (!more) { search.scanned = {index:0, body:0}; search.phase = null; }
   renderMessages();
   try {
-    const page = await api.search_messages(accountId, search.query, more ? search.cursor : null, search.serverFolder);
-    if (search !== mailSearch || view !== mailboxView) return;
-    const items = more ? search.items.concat(page.items) : page.items;
-    search.items = [...new Map(items.map(item => [item.uid,item])).values()];
-    search.cursor = page.next_cursor;
-    state.messages = search.items;
+    const started = Date.now();
+    const initialCount = more ? search.items.length : 0;
+    let continuation = more;
+    for (let pages = 0; pages < (search.cloud ? 12 : 1); pages++) {
+      const previousCursor = continuation ? search.cursor : null;
+      search.retryMore = continuation;
+      const page = await api.search_messages(accountId, search.query, previousCursor, search.serverFolder);
+      if (search !== mailSearch || view !== mailboxView) return;
+      if (page.next_cursor && page.next_cursor === previousCursor) throw new Error('Search did not advance. Start the search again.');
+      const items = continuation ? search.items.concat(page.items) : page.items;
+      search.items = [...new Map(items.map(item => [item.uid,item])).values()];
+      search.cursor = page.next_cursor;
+      if (page.search_progress) {
+        const progress = page.search_progress;
+        if (['index','body'].includes(progress.phase)) search.scanned[progress.phase] += progress.scanned || 0;
+        search.phase = progress.next_phase || progress.phase;
+      }
+      state.messages = search.items;
+      renderMessages(); updateUnreadCount();
+      if (!search.cursor || search.paused || search.items.length - initialCount >= 25 || Date.now() - started >= 8000) break;
+      continuation = true;
+    }
   } catch (error) {
     if (search !== mailSearch || view !== mailboxView) return;
     search.error = String(error);
-    search.retryMore = more;
   } finally {
     search.busy = false;
     if (search === mailSearch && view === mailboxView) {
@@ -389,7 +407,7 @@ function renderMessages() {
       m.sender.toLowerCase().includes(q) || m.subject.toLowerCase().includes(q));
   }
   if (!list.length) {
-    box.innerHTML = '<div class="empty">' + (mailSearch?.busy ? "Searching…" : mailSearch?.error ? "Search could not finish" : mailSearch?.cursor ? "More folders remain to search" : q ? "No matches" : "No messages") + "</div>";
+    box.innerHTML = '<div class="empty">' + (mailSearch?.busy ? "Searching…" : mailSearch?.error ? "Search could not finish" : mailSearch?.cursor ? (mailSearch.cloud ? "Search is not finished" : "More folders remain to search") : q ? "No matches" : "No messages") + "</div>";
   }
   list.forEach((m) => {
     const div = document.createElement("div");
@@ -416,15 +434,27 @@ function renderMessages() {
     box.appendChild(div);
   });
   if (mailSearch) {
+    if (mailSearch.cloud && (mailSearch.busy || mailSearch.cursor)) {
+      const progress = document.createElement('div'); progress.className = 'empty'; progress.setAttribute('role', 'status');
+      const counts = mailSearch.scanned;
+      progress.textContent = mailSearch.phase === 'body'
+        ? `Indexed search checked ${counts.index} messages; full text checked ${counts.body}.`
+        : mailSearch.phase === 'index' ? `Indexed search checked ${counts.index} messages.` : 'Searching mailbox…';
+      box.appendChild(progress);
+    }
     if (mailSearch.error) {
       const error = document.createElement('div'); error.className = 'empty'; error.textContent = mailSearch.error;
       box.appendChild(error);
     }
-    if (mailSearch.cursor || mailSearch.error) {
+    if (mailSearch.cursor || mailSearch.error || (mailSearch.cloud && mailSearch.busy)) {
       const button = document.createElement('button'); button.className = 'outline';
-      button.textContent = mailSearch.busy ? 'Searching…' : mailSearch.error ? 'Try search again' : 'Load more results';
-      button.disabled = mailSearch.busy;
-      button.onclick = () => loadSearchResults(mailSearch.error ? mailSearch.retryMore : true);
+      const pausable = mailSearch.cloud && mailSearch.busy;
+      button.textContent = pausable ? (mailSearch.paused ? 'Pausing…' : 'Pause search') : mailSearch.busy ? 'Searching…' : mailSearch.error ? 'Try search again' : mailSearch.cloud ? 'Continue search' : 'Load more results';
+      button.disabled = mailSearch.busy && (!pausable || mailSearch.paused);
+      button.onclick = () => {
+        if (pausable) { mailSearch.paused = true; renderMessages(); }
+        else loadSearchResults(mailSearch.error ? mailSearch.retryMore : true);
+      };
       box.appendChild(button);
     }
   }

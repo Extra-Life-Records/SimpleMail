@@ -49,6 +49,67 @@ function app() {
 const mail = (uid, seen = false) => ({ uid, subject: `Message ${uid}`, seen });
 const response = (envelopes, count = 2) => ({ envelopes, folder_unread: count, inbox_unread: count });
 
+test('cloud search reaches sparse indexed matches without manual empty-page clicks and remains bounded', async () => {
+  const a = app(); a.run("state.accounts[0].provider='cloud'; $('search-box').value='late (match)'; queueMailSearch()");
+  const calls = [];
+  a.api.search_messages = async (_,__,cursor) => {
+    calls.push(cursor); const number = cursor ? Number(cursor) + 1 : 1;
+    return {items:number === 6 ? [mail('late')] : [], next_cursor:String(number),
+      search_progress:{phase:'index',scanned:100,next_phase:'index'}};
+  };
+  await a.run('loadSearchResults()');
+  assert.equal(calls.length,12); assert.equal(a.run('state.messages[0].uid'),'late');
+  assert.equal(a.run('mailSearch.cursor'),'12'); assert.equal(a.run('mailSearch.busy'),false);
+  assert.equal(a.run('mailSearch.scanned.index'),1200);
+});
+
+test('cloud no-match stays incomplete until exhausted and resume starts at the last cursor', async () => {
+  const a=app(); a.run("state.accounts[0].provider='cloud'; $('search-box').value='absent'; queueMailSearch()");
+  const calls=[];
+  a.api.search_messages=async (_,__,cursor)=>{calls.push(cursor);const n=cursor?Number(cursor)+1:1;
+    return {items:[],next_cursor:n===13?null:String(n)};};
+  await a.run('loadSearchResults()');
+  assert.equal(a.run('mailSearch.cursor'),'12'); assert.equal(a.run('state.messages.length'),0);
+  await a.run('loadSearchResults(true)');
+  assert.equal(calls.at(-1),'12'); assert.equal(a.run('mailSearch.cursor'),null);
+});
+
+test('cloud automatic continuation preserves results and retries the failed cursor once', async () => {
+  const a=app(); a.run("state.accounts[0].provider='cloud'; $('search-box').value='match'; queueMailSearch()");
+  a.api.search_messages=async (_,__,cursor)=>{if(cursor)throw Error('offline');return {items:[mail('first')],next_cursor:'next'};};
+  await a.run('loadSearchResults()');
+  assert.equal(a.run('mailSearch.retryMore'),true); assert.equal(a.run('state.messages.length'),1);
+  a.api.search_messages=async (_,__,cursor)=>{assert.equal(cursor,'next');return {items:[mail('first'),mail('second')],next_cursor:null};};
+  await a.run('loadSearchResults(mailSearch.retryMore)');
+  assert.equal(a.run('state.messages.length'),2);
+});
+
+test('cloud pause stops after the in-flight read without dropping its result', async () => {
+  const a=app(); a.run("state.accounts[0].provider='cloud'; $('search-box').value='match'; queueMailSearch()");
+  const pending=deferred(); let calls=0;
+  a.api.search_messages=()=>{calls++;return pending.promise;};
+  const work=a.run('loadSearchResults()'); a.run('mailSearch.paused=true');
+  pending.resolve({items:[mail('arrived')],next_cursor:'next'}); await work;
+  assert.equal(calls,1); assert.equal(a.run('state.messages[0].uid'),'arrived');
+  assert.equal(a.run('mailSearch.cursor'),'next'); assert.equal(a.run('mailSearch.busy'),false);
+});
+
+test('replacing a cloud query or mailbox prevents an old continuation from starting another request', async () => {
+  const a=app(); a.run("state.accounts[0].provider='cloud'; $('search-box').value='old'; queueMailSearch()");
+  const pending=deferred();let calls=0;
+  a.api.search_messages=()=>{calls++;return pending.promise;};
+  const old=a.run('loadSearchResults()');
+  a.run("resetMailboxView(); state.activeAccountId='b'; state.messages=[{uid:'other'}]");
+  pending.resolve({items:[mail('stale')],next_cursor:'old-next'});await old;
+  assert.equal(calls,1);assert.equal(a.run('state.messages[0].uid'),'other');assert.equal(a.run('mailSearch'),null);
+});
+
+test('cloud elapsed-time budget returns control and preserves continuation', async () => {
+  const a=app();a.run("state.accounts[0].provider='cloud'; $('search-box').value='match'; queueMailSearch(); let clock=0; Date.now=()=>clock");
+  let calls=0;a.api.search_messages=async()=>{calls++;a.run('clock+=3000');return {items:[],next_cursor:String(calls)};};
+  await a.run('loadSearchResults()');assert.equal(calls,3);assert.equal(a.run('mailSearch.cursor'),'3');
+});
+
 test('quiet cloud refresh exposes expired sign-in until a successful refresh', async () => {
   const a = app();
   a.run("state.accounts[0].provider='cloud'; state.messages=[{uid:'saved',subject:'Existing mail'}]");

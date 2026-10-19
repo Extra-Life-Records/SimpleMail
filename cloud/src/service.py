@@ -445,12 +445,68 @@ def dispatch(table, s3, ses, subject, method, path, data, query):
     raise ValueError('Unknown endpoint')
 
 
+def indexed_search(table, s3, pk, query, unread=False, untriaged=False):
+    """Surface indexed matches before bounded full-text fallback; never scan S3 in bulk."""
+    folder = query.get('folder', 'Inbox')
+    needle = query['q'].casefold()
+    scope = hashlib.sha256(json.dumps([pk, folder, needle, unread, untriaged]).encode()).hexdigest()
+    phase, after = 'index', None
+    cursor = query.get('cursor')
+    if cursor:
+        try:
+            if not isinstance(cursor, str) or len(cursor) > 2048: raise ValueError()
+            decoded = json.loads(base64.urlsafe_b64decode(cursor))
+            if decoded['v'] != 1 or decoded['scope'] != scope or decoded['phase'] not in ('index', 'body'):
+                raise ValueError()
+            phase, after = decoded['phase'], decoded['after']
+            if after is not None:
+                if (set(after) != {'sk', 'received'} or not isinstance(after['received'], str)
+                        or len(after['received']) > 40 or not re.fullmatch(r'MSG#[a-zA-Z0-9_-]{1,100}', after['sk'])):
+                    raise ValueError()
+        except Exception:
+            raise ValueError('Search cursor changed or expired; start the search again') from None
+    args = {'KeyConditionExpression': Key('pk').eq(pk), 'IndexName': 'Chronological',
+            'ScanIndexForward': False, 'Limit': min(int(query.get('limit', '100')), 100 if phase == 'index' else 10)}
+    if after: args['ExclusiveStartKey'] = {'pk': pk, **after}
+    page = table.query(**args)
+    rows = []
+    for row in page['Items']:
+        if folder != 'All' and row['folder'] != folder: continue
+        if unread and row.get('seen'): continue
+        if untriaged and row.get('triage'): continue
+        indexed_match = needle in row.get('search', '')
+        if phase == 'index':
+            if indexed_match: rows.append(public(row))
+        elif not indexed_match and not row.get('quarantined'):
+            raw = read_raw(s3, row)
+            content = json.loads(raw) if row.get('kind') == 'draft' else parse(raw, maximum=None)
+            if needle in '\n'.join(str(content.get(k, '')) for k in ('subject', 'sender', 'to', 'cc', 'body')).casefold():
+                rows.append(public(row))
+    next_key = page.get('LastEvaluatedKey')
+    next_phase = phase
+    if not next_key and phase == 'index' and (after or page['Items']):
+        next_phase = 'body'
+    more = bool(next_key) or next_phase != phase
+    next_cursor = None
+    if more:
+        position = {field: next_key[field] for field in ('sk', 'received')} if next_key else None
+        next_cursor = base64.urlsafe_b64encode(json.dumps(
+            {'v': 1, 'scope': scope, 'phase': next_phase, 'after': position}).encode()).decode()
+    return {'messages': rows, 'cursor': next_cursor,
+            'search_progress': {'phase': phase, 'scanned': len(page['Items']), 'next_phase': next_phase if more else None}}
+
+
 def list_messages(table, s3, pk, query, unread=False, untriaged=False):
     folder = query.get('folder', 'Inbox')
     if not mailboxes.folder(folder): raise ValueError('Invalid folder')
     requested = query.get('limit', '10')
     if not isinstance(requested, str) or not re.fullmatch(r'[1-9][0-9]{0,2}', requested) or int(requested) > 100:
         raise ValueError('Page size must be between 1 and 100')
+    if query.get('search_mode'):
+        if (query['search_mode'] != 'indexed' or not isinstance(query.get('q'), str)
+                or not 0 < len(query['q']) <= 1000):
+            raise ValueError('Invalid search mode')
+        return indexed_search(table, s3, pk, query, unread, untriaged)
     # Full-body search may read MIME from S3, so preserve its smaller work bound.
     page_size = min(int(requested), 10) if query.get('q') else int(requested)
     kwargs = {'KeyConditionExpression': Key('pk').eq(pk), 'IndexName': 'Chronological',
