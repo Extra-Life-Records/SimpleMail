@@ -12,6 +12,9 @@ messages are fetched with BODY.PEEK so reading never marks them as read.
 
 Serve:  python3 env_mail_mcp.py serve
 Check:  python3 env_mail_mcp.py check   (logs in, prints the unread count)
+
+When SIMPLEMAIL_CLOUD_API_URL is set, it serves the AWS mailboxes through the
+read-only robot reader instead (cloud_reader.py); check then lists the mailboxes.
 """
 import argparse
 import json
@@ -112,6 +115,8 @@ def main(argv=None):
     parser = argparse.ArgumentParser(description="Read-only MCP access to one mailbox from environment settings")
     parser.add_argument("command", choices=("serve", "check"))
     args = parser.parse_args(argv)
+    if os.environ.get("SIMPLEMAIL_CLOUD_API_URL"):
+        return cloud_main(args.command)
     from contextlib import redirect_stdout
     try:
         with redirect_stdout(sys.stderr):  # stdout is reserved for the protocol
@@ -132,6 +137,23 @@ def main(argv=None):
         if hasattr(stream, "reconfigure"):
             stream.reconfigure(encoding="utf-8")
     ReadOnlyServer(mailbox).serve(sys.stdin, sys.stdout)
+    return 0
+
+
+def cloud_main(command):
+    from cloud_reader import CloudReader, CloudReaderServer
+    reader = CloudReader()
+    if command == "check":
+        try:
+            print(json.dumps({"mailboxes": [box["address"] for box in reader.mailboxes()]}))
+        except ValueError as exc:
+            print(str(exc), file=sys.stderr)
+            return 1
+        return 0
+    for stream in (sys.stdin, sys.stdout):
+        if hasattr(stream, "reconfigure"):
+            stream.reconfigure(encoding="utf-8")
+    CloudReaderServer(reader).serve(sys.stdin, sys.stdout)
     return 0
 
 

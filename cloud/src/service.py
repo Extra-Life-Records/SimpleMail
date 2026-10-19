@@ -17,6 +17,7 @@ from email.policy import default
 from email.utils import getaddresses, formatdate, make_msgid
 
 import boto3
+import mailboxes
 from boto3.dynamodb.conditions import Key
 from botocore.exceptions import ClientError
 
@@ -45,12 +46,27 @@ def clients():
 
 
 def meta(table, name):
-    if name not in NAMES:
+    configured = mailboxes.registry()
+    if name not in configured:
         raise Denied('Unknown mailbox')
     item = table.get_item(Key={'pk': name, 'sk': 'META'}, ConsistentRead=True).get('Item')
     if not item:
         raise Denied('Mailbox has not been provisioned')
+    if name not in NAMES and item.get('address') != configured[name]['address']:
+        raise Denied('Mailbox identity changed; operator reconciliation required')
     return item
+
+
+def mailbox_names():
+    return tuple(mailboxes.registry())
+
+
+def mailbox_address(name):
+    return mailboxes.registry()[name]['address']
+
+
+def mailbox_folders(item):
+    return list(dict.fromkeys([*FOLDERS, *item.get('import_folders', [])]))
 
 
 def authorize(table, name, subject):
@@ -152,10 +168,13 @@ def receive(event, context):
                     for kind in ('spamVerdict', 'virusVerdict', 'spfVerdict', 'dkimVerdict', 'dmarcVerdict')}
         unsafe = verdicts['virusVerdict'] != 'PASS'
         junk = unsafe or verdicts['spamVerdict'] != 'PASS'
-        for recipient in set(receipt['recipients']):
-            name, _, domain = recipient.lower().partition('@')
-            if name not in NAMES or domain != os.environ['RECEIVE_DOMAIN']:
-                continue
+        routes = mailboxes.routes()
+        recipients = sorted({recipient.lower() for recipient in receipt['recipients']})
+        # Exact envelope recipients only. MIME To/Cc never choose a mailbox.
+        # A mismatched SES rule must surface for retry/DLQ reconciliation.
+        if any(recipient not in routes for recipient in recipients):
+            raise ValueError('Receipt contains an unconfigured recipient')
+        for name in sorted({routes[recipient] for recipient in recipients}):
             mailbox = meta(table, name)
             if mailbox['state'] == 'Disabled':
                 continue
@@ -177,6 +196,7 @@ def receive(event, context):
             row = {'pk': pk, 'sk': 'MSG#' + mid, 'id': mid, 'key': key,
                    'folder': 'Junk' if junk else 'Inbox', 'seen': False,
                    'received': received, 'quarantined': unsafe,
+                   'recipients': [recipient for recipient in recipients if routes[recipient] == name],
                    'verdicts': verdicts, 'subject': parsed['subject'][:1000],
                    'sender': parsed['sender'][:1000], 'date': parsed['date'][:100],
                    'search': search_text(parsed['subject'] + '\n' + parsed['sender'] + '\n' +
@@ -224,14 +244,27 @@ def validate_draft(data):
     return result
 
 
-def send(table, s3, ses, item, subject, data):
-    if os.environ.get('SENDING_ENABLED') != 'true': raise Denied('Outbound mail is not enabled yet')
+def send(table, s3, ses, item, subject, data, *, human=False):
+    enabled = 'HUMAN_SENDING_ENABLED' if human else 'SENDING_ENABLED'
+    if os.environ.get(enabled) != 'true': raise Denied('Outbound mail is not enabled yet')
+    if human and mailbox_address(item['pk']) not in os.environ.get('HUMAN_SENDER_ADDRESSES', '').split(','):
+        raise Denied('Sender has not been enabled for manual replies')
+    if not human and item['pk'] not in NAMES:
+        raise Denied('Migrated mailboxes have no enabled outbound route')
     request = data.get('request_id', '')
     if not re.fullmatch(r'[a-zA-Z0-9_-]{16,80}', request): raise ValueError('A unique request ID is required')
     draft = validate_draft(data)
+    if human:
+        for field, maximum in (('body_html', 500000), ('in_reply_to', 2000), ('references', 10000)):
+            value = data.get(field) or ''
+            if not isinstance(value, str) or len(value) > maximum or (field != 'body_html' and any(c in value for c in '\r\n')):
+                raise ValueError('Invalid manual message field')
+            draft[field] = value
     recipients = [addr for _, addr in getaddresses([draft[k] for k in ('to', 'cc', 'bcc')])]
     if not recipients or len(recipients) > 20: raise ValueError('Specify 1 to 20 recipients')
-    digest = hashlib.sha256(json.dumps({**draft, 'reply_id': data.get('reply_id')}, sort_keys=True).encode()).hexdigest()
+    digest_payload = {**draft, 'reply_id': data.get('reply_id')}
+    if human: digest_payload['human'] = True
+    digest = hashlib.sha256(json.dumps(digest_payload, sort_keys=True).encode()).hexdigest()
     pk = partition(item)
     key = {'pk': pk, 'sk': 'SEND#' + request}
     # Claim before SES. No retry of an uncertain SES outcome can double-send.
@@ -244,7 +277,7 @@ def send(table, s3, ses, item, subject, data):
         if existing['payload_hash'] != digest: raise ValueError('Request ID already used for different content')
         return public(existing)
     msg = EmailMessage()
-    msg['From'] = item['pk'] + '@' + os.environ['DOMAIN']
+    msg['From'] = mailbox_address(item['pk'])
     for name in ('to', 'cc', 'subject'):
         if draft[name]: msg[name.title()] = draft[name]
     msg['Date'] = formatdate(localtime=False)
@@ -256,6 +289,10 @@ def send(table, s3, ses, item, subject, data):
         if original['message_id']:
             msg['In-Reply-To'] = original['message_id']; msg['References'] = original['message_id']
     msg.set_content(draft['body'])
+    if human:
+        if draft['body_html']: msg.add_alternative(draft['body_html'], subtype='html')
+        if not reply and draft['in_reply_to']: msg['In-Reply-To'] = draft['in_reply_to']
+        if not reply and draft['references']: msg['References'] = draft['references']
     for attachment in draft['attachments']:
         msg.add_attachment(base64.b64decode(attachment['data']), maintype='application',
                            subtype='octet-stream', filename=attachment['name'])
@@ -310,7 +347,7 @@ def delivery(event, context):
         if not state: continue
         tags = notice['mail']['tags']
         name, generation, request = (tags[k][0] for k in ('mailbox', 'generation', 'request'))
-        if name not in NAMES or not re.fullmatch(r'[a-zA-Z0-9_-]{1,100}', generation + request):
+        if name not in mailbox_names() or not re.fullmatch(r'[a-zA-Z0-9_-]{1,100}', generation + request):
             raise ValueError('Unexpected delivery tags')
         pk = name + '#' + generation
         for sk in ('SEND#' + request, 'MSG#' + request):
@@ -330,12 +367,17 @@ def delivery(event, context):
 
 
 def dispatch(table, s3, ses, subject, method, path, data, query):
+    if path.startswith('/ai/'):
+        if os.environ.get('MCP_ENABLED') != 'true': raise Denied('AI connections are not enabled')
+        from ai_access import owner_dispatch
+        return owner_dispatch(table, s3, subject, method, path, data)
     if method == 'GET' and path == '/mailboxes':
         items = []
-        for name in NAMES:
+        for name in mailbox_names():
             try:
                 item = authorize(table, name, subject)
-                items.append({'name': name, 'address': name + '@' + os.environ['DOMAIN'], 'state': item['state']})
+                items.append({'name': name, 'address': mailbox_address(name), 'state': item['state'],
+                              'folders': mailbox_folders(item)})
             except Denied: pass
         return {'mailboxes': items}
     parts = path.strip('/').split('/')
@@ -343,41 +385,13 @@ def dispatch(table, s3, ses, subject, method, path, data, query):
     item = authorize(table, parts[1], subject)
     pk = partition(item)
     tail = parts[2:]
+    if tail == ['folders'] and method == 'GET':
+        return {'folders': mailbox_folders(item)}
     if len(tail) == 2 and tail[0] == 'sends' and method == 'GET':
         if not re.fullmatch(r'[a-zA-Z0-9_-]{16,80}', tail[1]): raise ValueError('Invalid send ID')
         row = table.get_item(Key={'pk': pk, 'sk': 'SEND#' + tail[1]}, ConsistentRead=True).get('Item')
         return public(row) if row else {'status': 'not_started'}
-    if tail == ['messages'] and method == 'GET':
-        folder = query.get('folder', 'Inbox')
-        if folder not in FOLDERS and folder != 'All': raise ValueError('Invalid folder')
-        kwargs = {'KeyConditionExpression': Key('pk').eq(pk), 'IndexName': 'Chronological',
-                  'ScanIndexForward': False, 'Limit': 10}
-        cursor = query.get('cursor')
-        if cursor:
-            # Cursor cannot choose another partition or arbitrary DynamoDB key.
-            try:
-                decoded = json.loads(base64.urlsafe_b64decode(cursor))
-                if not re.fullmatch(r'MSG#[a-zA-Z0-9_-]{1,100}', decoded['sk']) or len(decoded['received']) > 40:
-                    raise ValueError('Invalid cursor')
-                kwargs['ExclusiveStartKey'] = {'pk': pk, 'sk': decoded['sk'], 'received': decoded['received']}
-            except Exception: raise ValueError('Invalid cursor') from None
-        page = table.query(**kwargs)
-        needle = query.get('q', '').casefold()[:1000]
-        rows = []
-        for row in page['Items']:
-            if folder != 'All' and row['folder'] != folder: continue
-            matches = needle in row.get('search', '')
-            if needle and not matches and not row.get('quarantined'):
-                # Search past the small DynamoDB preview index. Never silently
-                # exclude long bodies; attachment binary contents are not searched.
-                raw = read_raw(s3, row)
-                content = json.loads(raw) if row.get('kind') == 'draft' else parse(raw, maximum=None)
-                matches = needle in '\n'.join(str(content.get(k, '')) for k in
-                                              ('subject', 'sender', 'to', 'cc', 'body')).casefold()
-            if matches: rows.append(public(row))
-        next_key = page.get('LastEvaluatedKey')
-        next_cursor = base64.urlsafe_b64encode(json.dumps({'sk': next_key['sk'], 'received': next_key['received']}).encode()).decode() if next_key else None
-        return {'messages': rows, 'cursor': next_cursor}
+    if tail == ['messages'] and method == 'GET': return list_messages(table, s3, pk, query)
     if tail == ['send'] and method == 'POST': return send(table, s3, ses, item, subject, data)
     if tail == ['drafts'] and method == 'POST':
         draft = validate_draft(data)
@@ -408,24 +422,88 @@ def dispatch(table, s3, ses, subject, method, path, data, query):
         if len(tail) == 2 and method == 'PATCH':
             folder = data.get('folder', row['folder'])
             seen = data.get('seen', row['seen'])
-            if folder not in FOLDERS or not isinstance(seen, bool): raise ValueError('Invalid message update')
+            if folder not in mailbox_folders(item) or not isinstance(seen, bool): raise ValueError('Invalid message update')
             table.update_item(Key={'pk': pk, 'sk': row['sk']}, UpdateExpression='SET folder=:f, seen=:s',
                               ExpressionAttributeValues={':f': folder, ':s': seen})
             return {'ok': True}
-        if method == 'GET':
-            if row.get('quarantined'): raise Denied('Message quarantined: virus scan did not pass')
-            raw = read_raw(s3, row)
-            if len(tail) == 2:
-                if row.get('kind') == 'draft': return {**public(row), 'draft': json.loads(raw)}
-                return {**public(row), **parse(raw)}
-            if len(tail) == 4 and tail[2] == 'attachments' and tail[3].isdigit():
-                for index, part in enumerate(message_from_bytes(raw, policy=default).walk()):
-                    if index == int(tail[3]) and (part.get_filename() or part.get_content_disposition() == 'attachment'):
-                        payload = part.get_payload(decode=True) or b''
-                        if len(payload) > MAX_ATTACHMENT: raise ValueError('Attachment exceeds 3 MB download limit')
-                        return {'name': part.get_filename() or 'attachment', 'data': base64.b64encode(payload).decode()}
-                raise Denied('Attachment unavailable')
+        if method == 'GET': return read_message(s3, row, tail, query)
     raise ValueError('Unknown endpoint')
+
+
+def list_messages(table, s3, pk, query, unread=False, untriaged=False):
+    folder = query.get('folder', 'Inbox')
+    if not mailboxes.folder(folder): raise ValueError('Invalid folder')
+    kwargs = {'KeyConditionExpression': Key('pk').eq(pk), 'IndexName': 'Chronological',
+              'ScanIndexForward': False, 'Limit': 10}
+    cursor = query.get('cursor')
+    if cursor:
+        # Cursor cannot choose another partition or arbitrary DynamoDB key.
+        try:
+            decoded = json.loads(base64.urlsafe_b64decode(cursor))
+            if not re.fullmatch(r'MSG#[a-zA-Z0-9_-]{1,100}', decoded['sk']) or len(decoded['received']) > 40:
+                raise ValueError('Invalid cursor')
+            kwargs['ExclusiveStartKey'] = {'pk': pk, 'sk': decoded['sk'], 'received': decoded['received']}
+        except Exception: raise ValueError('Invalid cursor') from None
+    page = table.query(**kwargs)
+    needle = query.get('q', '').casefold()[:1000]
+    rows = []
+    for row in page['Items']:
+        if folder != 'All' and row['folder'] != folder: continue
+        if unread and row.get('seen'): continue
+        if untriaged and row.get('triage'): continue
+        matches = needle in row.get('search', '')
+        if needle and not matches and not row.get('quarantined'):
+            # Search past the small DynamoDB preview index. Never silently
+            # exclude long bodies; attachment binary contents are not searched.
+            raw = read_raw(s3, row)
+            content = json.loads(raw) if row.get('kind') == 'draft' else parse(raw, maximum=None)
+            matches = needle in '\n'.join(str(content.get(k, '')) for k in
+                                          ('subject', 'sender', 'to', 'cc', 'body')).casefold()
+        if matches: rows.append(public(row))
+    next_key = page.get('LastEvaluatedKey')
+    next_cursor = base64.urlsafe_b64encode(json.dumps({'sk': next_key['sk'], 'received': next_key['received']}).encode()).decode() if next_key else None
+    return {'messages': rows, 'cursor': next_cursor}
+
+
+def read_message(s3, row, tail, query=None):
+    """GET one message (tail = messages/<id>) or attachment (messages/<id>/attachments/<n>)."""
+    if row.get('quarantined'): raise Denied('Message quarantined: virus scan did not pass')
+    raw = read_raw(s3, row)
+    if len(tail) == 2:
+        if row.get('kind') == 'draft': return {**public(row), 'draft': json.loads(raw)}
+        return {**public(row), **parse(raw)}
+    if len(tail) == 4 and tail[2] == 'attachments' and tail[3].isdigit():
+        return attachment(raw, int(tail[3]))
+    if len(tail) == 4 and tail[2] == 'downloads' and tail[3].isdigit():
+        # Auth is checked again for every chunk. No public/signed file URL and no
+        # Lambda/API Gateway response larger than their buffered payload limits.
+        return attachment_chunk(raw, int(tail[3]), (query or {}).get('offset', '0'))
+    raise ValueError('Unknown endpoint')
+
+
+def attachment(raw, wanted):
+    for index, part in enumerate(message_from_bytes(raw, policy=default).walk()):
+        if index == wanted and (part.get_filename() or part.get_content_disposition() == 'attachment'):
+            payload = part.get_payload(decode=True) or b''
+            if len(payload) > MAX_ATTACHMENT: raise ValueError('Attachment exceeds 3 MB download limit')
+            return {'name': part.get_filename() or 'attachment', 'data': base64.b64encode(payload).decode()}
+    raise Denied('Attachment unavailable')
+
+
+def attachment_chunk(raw, wanted, offset):
+    if not isinstance(offset, str) or not re.fullmatch(r'0|[1-9][0-9]{0,8}', offset):
+        raise ValueError('Invalid attachment offset')
+    offset = int(offset)
+    for index, part in enumerate(message_from_bytes(raw, policy=default).walk()):
+        if index == wanted and (part.get_filename() or part.get_content_disposition() == 'attachment'):
+            payload = part.get_payload(decode=True) or b''
+            if offset > len(payload): raise ValueError('Attachment offset exceeds size')
+            chunk = payload[offset:offset + 1024 * 1024]
+            following = offset + len(chunk)
+            return {'name': part.get_filename() or 'attachment', 'data': base64.b64encode(chunk).decode(),
+                    'size': len(payload), 'offset': offset, 'sha256': hashlib.sha256(payload).hexdigest(),
+                    'next_offset': following if following < len(payload) else None}
+    raise Denied('Attachment unavailable')
 
 
 def api(event, context):
@@ -433,6 +511,8 @@ def api(event, context):
         claims = event['requestContext']['authorizer']['jwt']['claims']
         if claims.get('token_use') != 'access' or int(claims.get('exp', 0)) <= int(time.time()):
             raise Denied('Session expired; sign in again')
+        if event.get('rawPath', '').startswith('/ai/') and claims.get('client_id') != os.environ.get('OWNER_CLIENT_ID'):
+            raise Denied('Open AI settings with the owner SimpleMail session')
         raw = event.get('body') or '{}'
         if event.get('isBase64Encoded'): raw = base64.b64decode(raw).decode()
         if len(raw) > 4500000: raise ValueError('Request exceeds size limit')

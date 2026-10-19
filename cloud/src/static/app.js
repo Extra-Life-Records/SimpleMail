@@ -2,6 +2,7 @@
 const $ = id => document.getElementById(id);
 let cfg, desktop, token, expiry = 0, selected = '', folder = 'Inbox', cursor, revision = 0;
 let draftId, draftRevision, replyId, attachments = [], sendId = null, pendingSend = false;
+let mailboxFolders = {};
 let outstanding = JSON.parse(localStorage.getItem('pending-send') || 'null');
 pendingSend=Boolean(outstanding);
 const status = text => { $('status').textContent = text; };
@@ -33,11 +34,18 @@ function guard(fn){return async event=>{try{await fn(event);}catch(e){status(Str
 async function load(){
   const result=await request('GET','/mailboxes');
   $('mailbox').replaceChildren();
-  for(const box of result.mailboxes){const option=new Option(box.address,box.name);option.dataset.state=box.state;$('mailbox').add(option);}
+  mailboxFolders={};
+  for(const box of result.mailboxes){const option=new Option(box.address,box.name);option.dataset.state=box.state;$('mailbox').add(option);mailboxFolders[box.name]=box.folders||['Inbox','Sent','Drafts','Junk','Trash'];}
   $('mail').hidden=!result.mailboxes.length;$('logout').hidden=false;$('login').hidden=true;
   if(!result.mailboxes.length){status('No mailbox is currently assigned to this login.');return;}
-  selected=$('mailbox').value;await list();
+  selected=$('mailbox').value;renderFolders();await list();
   if(outstanding){$('check-send').hidden=false;status('A previous send needs its status checked before composing another message.');}
+}
+function renderFolders(){
+  const names=mailboxFolders[selected]||['Inbox','Sent','Drafts','Junk','Trash'];
+  if(!names.includes(folder))folder='Inbox';
+  $('folders').replaceChildren();
+  for(const name of names){const button=document.createElement('button');button.textContent=name;button.classList.toggle('active',name===folder);button.onclick=guard(async()=>{folder=name;$('search').value='';for(const b of $('folders').children)b.classList.toggle('active',b===button);await list();});$('folders').append(button);}
 }
 async function list(more=false){
   const current=++revision;
@@ -118,8 +126,7 @@ $('check-send').onclick=guard(async()=>{
 });
 $('logout').onclick=guard(async()=>{if(desktop)await desktop.cloud_logout();else{const refresh=sessionStorage.getItem('refresh');sessionStorage.removeItem('refresh');token=null;if(refresh)await fetch(cfg.auth_url+'/oauth2/revoke',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:new URLSearchParams({token:refresh,client_id:cfg.client_id})});}location.reload();});
 $('connect').onclick=guard(async()=>{await desktop.cloud_configure({api_url:$('api-url').value,auth_url:$('auth-url').value,client_id:$('client-id').value});location.reload();});
-$('mailbox').onchange=guard(async()=>{if(pendingSend){$('mailbox').value=selected;throw Error('Resolve the uncertain send before switching mailboxes.');}selected=$('mailbox').value;$('editor').hidden=true;$('reading').hidden=false;$('reading').replaceChildren();await list();});
-for(const name of ['Inbox','Sent','Drafts','Junk','Trash']){const button=document.createElement('button');button.textContent=name;button.onclick=guard(async()=>{folder=name;$('search').value='';for(const b of $('folders').children)b.classList.toggle('active',b===button);await list();});$('folders').append(button);}
+$('mailbox').onchange=guard(async()=>{if(pendingSend){$('mailbox').value=selected;throw Error('Resolve the uncertain send before switching mailboxes.');}selected=$('mailbox').value;renderFolders();$('editor').hidden=true;$('reading').hidden=false;$('reading').replaceChildren();await list();});
 $('refresh').onclick=guard(()=>list());$('more').onclick=guard(()=>list(true));$('search').onchange=guard(()=>list());$('compose').onclick=guard(()=>edit());$('cancel').onclick=()=>{$('editor').hidden=true;$('reading').hidden=false;};
 $('editor').onsubmit=guard(send);
 $('save').onclick=guard(async()=>{if(pendingSend)throw Error('Resolve the send outcome first.');const result=await request('POST',base()+'/drafts',{...payload(),attachments,id:draftId,revision:draftRevision});draftId=result.id;draftRevision=result.revision;status('Draft saved.');});

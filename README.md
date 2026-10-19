@@ -138,6 +138,12 @@ SimpleMail distributes itself through **GitHub releases**:
 
 ### Releasing a new version (the workflow)
 
+The prepared 1.9.8 migration candidate adds native cloud custom folders and
+checksummed attachment downloads for imported mail. Its operator import and draft
+restore tools are separate from the desktop executables; see
+[mail migration preparation](cloud/MIGRATION.md). A version bump does not establish
+publication or installation. Replacement mailbox sending remains disabled.
+
 1. **Edit code** on any machine, commit, push to `main`.
 2. **Bump the version** in `mailapp.py` (`APP_VERSION = "x.y.z"`), commit, push.
 3. **Tag and push**:

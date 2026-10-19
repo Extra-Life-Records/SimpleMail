@@ -4,6 +4,8 @@ Account IDs never select a URL or sender: discovery supplies identities, and
 every message request remains subject to the server's assignment checks.
 """
 import functools
+import base64
+import hashlib
 import inspect
 import re
 from email.message import EmailMessage
@@ -37,7 +39,7 @@ class CloudAccounts:
             'label': row['address'], 'email': row['address'], 'identity': row['address'],
             'color': '#2563eb',
             'signature': self.owner.cfg.data.get('cloud_signatures', {}).get(PREFIX + row['name'], ''),
-            'rules': {}, 'assignment': row['state']}
+            'rules': {}, 'assignment': row['state'], 'folders': row.get('folders', list(FOLDERS))}
             for row in rows if re.fullmatch(r'[a-z0-9_-]+', row['name'])}
         return list(self.accounts.values())
 
@@ -56,6 +58,8 @@ class CloudAccounts:
     def folder(folder):
         for value in FOLDERS:
             if value.lower() == str(folder).lower(): return value
+        if isinstance(folder, str) and 0 < len(folder) <= 500 and not any(ord(c) < 32 or ord(c) == 127 for c in folder):
+            return folder
         raise ValueError('Unknown mailbox folder')
 
     def page(self, account, folder='All', query='', cursor=None):
@@ -80,8 +84,8 @@ class CloudAccounts:
                 'date': row.get('date', row.get('received', '')), 'seen': row.get('seen', False)}
 
     def get_folders(self, account):
-        return {'folders': [{'key': f.lower(), 'name': f, 'server': f, 'unread': 0}
-                            for f in FOLDERS], 'error': None}
+        return {'folders': [{'key': f.lower() if f in FOLDERS else f, 'name': f, 'server': f, 'unread': 0}
+                            for f in self.accounts[account].get('folders', FOLDERS)], 'error': None}
 
     def list_messages(self, account, folder):
         rows = self.rows(account, self.folder(folder))
@@ -134,9 +138,29 @@ class CloudAccounts:
 
     def save_attachment(self, account, folder, uid, part_index, validity=None):
         if not str(part_index).isdigit(): raise ValueError('Invalid attachment')
-        file = self.request(account, 'GET', self.mid(uid) + '/attachments/' + str(part_index))
+        file = self.attachment_file(account, uid, part_index)
         result = self.transport.cloud_save_attachment(file)
         return {'path': result.get('path', '')}
+
+    def attachment_file(self, account, uid, part):
+        chunks, offset, identity = [], 0, None
+        while True:
+            file = self.request(account, 'GET', self.mid(uid) + '/downloads/' + str(part) + '?offset=' + str(offset))
+            current = (file['name'], file['size'], file['sha256'])
+            if identity is None: identity = current
+            if current != identity or not 0 <= file['size'] <= 30 * 1024 * 1024 or file['offset'] != offset:
+                raise ValueError('Attachment changed during download')
+            raw = base64.b64decode(file['data'], validate=True)
+            if len(raw) > 1024 * 1024 or offset + len(raw) > file['size']:
+                raise ValueError('Invalid attachment chunk')
+            chunks.append(raw); offset += len(raw)
+            if file['next_offset'] is None:
+                if offset != file['size']: raise ValueError('Incomplete attachment download')
+                break
+            if not raw or file['next_offset'] != offset: raise ValueError('Invalid attachment continuation')
+        payload = b''.join(chunks)
+        if hashlib.sha256(payload).hexdigest() != identity[2]: raise ValueError('Attachment checksum failed')
+        return {'name': identity[0], 'data': base64.b64encode(payload).decode()}
 
     def get_compose_context(self, account, folder, uid, reply_all=False, forward=False, validity=None):
         from mail_attachments import reply_context
@@ -149,7 +173,7 @@ class CloudAccounts:
         attachments = []
         if forward:
             for part in row.get('attachments', []):
-                file = self.request(account, 'GET', self.mid(uid) + '/attachments/' + str(part['part']))
+                file = self.attachment_file(account, uid, part['part'])
                 attachments.append(self.owner._attachment_store().add_base64(account, file['name'], file['data']))
         return {**context, 'subject': row.get('subject', ''), 'sender': row.get('sender', ''),
                 'date': row.get('date', ''), 'text': row.get('body', ''), 'attachments': attachments}

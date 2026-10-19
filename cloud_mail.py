@@ -191,7 +191,7 @@ class CloudMail:
         import webview
         name = Path(file['name'].replace('\\', '/')).name
         payload = base64.b64decode(file['data'], validate=True)
-        if len(payload) > 3 * 1024 * 1024: raise ValueError('Attachment exceeds download bound')
+        if len(payload) > 30 * 1024 * 1024: raise ValueError('Attachment exceeds download bound')
         if not self._window: raise ValueError('No inbox window')
         target = self._window.create_file_dialog(webview.SAVE_DIALOG, save_filename=name)
         if target:
