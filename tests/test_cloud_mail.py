@@ -7,9 +7,10 @@ from urllib.request import urlopen
 import threading
 import unittest
 from pathlib import Path
-from unittest.mock import Mock, patch
+from unittest.mock import MagicMock, Mock, patch
 from cloud_mail import (CloudMail, NoRedirect, CloudSignInRequired, CloudAccessDenied,
-                        CloudConfigurationError, CloudServiceError, CloudRequestError)
+                        CloudConfigurationError, CloudServiceError, CloudThrottled, CloudRequestError,
+                        READ_RETRY_DELAYS)
 
 
 class CloudAdapterTests(unittest.TestCase):
@@ -105,6 +106,67 @@ class CloudAdapterTests(unittest.TestCase):
                 self.assertIn('check Sent', str(result.exception))
                 self.assertNotIn('private', str(result.exception))
                 self.assertEqual(opener.open.call_count, 1)
+
+    def throttled(self):
+        return HTTPError('https://fixture.invalid/secret', 429, 'private provider detail', {},
+                         io.BytesIO(b'{"message":"Too Many Requests"}'))
+
+    def test_throttled_read_waits_and_asks_again(self):
+        self.adapter._access_token, self.adapter._expires = 'access-secret', float('inf')
+        self.adapter._sleep = Mock()
+        answer = MagicMock()
+        answer.__enter__.return_value.read.return_value = b'{"messages": [], "cursor": null}'
+        opener = Mock()
+        opener.open.side_effect = [self.throttled(), self.throttled(), answer]
+        with patch('cloud_mail.build_opener', return_value=opener):
+            page = self.adapter.cloud_request('GET', '/mailboxes/one/messages?folder=Inbox&limit=100')
+        self.assertEqual(page, {'messages': [], 'cursor': None})
+        self.assertEqual(opener.open.call_count, 3)
+        waits = [call.args[0] for call in self.adapter._sleep.call_args_list]
+        self.assertEqual(len(waits), 2)
+        self.assertTrue(READ_RETRY_DELAYS[0] <= waits[0] <= READ_RETRY_DELAYS[0] * 1.5)
+        self.assertTrue(READ_RETRY_DELAYS[1] <= waits[1] <= READ_RETRY_DELAYS[1] * 1.5)
+
+    def test_read_that_stays_throttled_gives_up_after_bounded_waits(self):
+        self.adapter._access_token, self.adapter._expires = 'access-secret', float('inf')
+        self.adapter._sleep = Mock()
+        opener = Mock()
+        opener.open.side_effect = [self.throttled() for _ in range(len(READ_RETRY_DELAYS) + 1)]
+        with patch('cloud_mail.build_opener', return_value=opener):
+            with self.assertRaises(CloudServiceError) as result:
+                self.adapter.cloud_request('GET', '/mailboxes/one/messages?folder=Inbox')
+        self.assertIsInstance(result.exception, CloudThrottled)
+        self.assertNotIn('private', str(result.exception))
+        self.assertEqual(opener.open.call_count, len(READ_RETRY_DELAYS) + 1)
+        self.assertEqual(self.adapter._sleep.call_count, len(READ_RETRY_DELAYS))
+        self.assertLessEqual(sum(call.args[0] for call in self.adapter._sleep.call_args_list),
+                             sum(READ_RETRY_DELAYS) * 1.5)
+
+    def test_throttled_change_is_never_repeated(self):
+        for method, path in (('POST', '/mailboxes/one/send'), ('PATCH', '/mailboxes/one/messages/abc')):
+            with self.subTest(method=method):
+                self.adapter._access_token, self.adapter._expires = 'access-secret', float('inf')
+                self.adapter._sleep = Mock()
+                opener = Mock()
+                opener.open.side_effect = self.throttled()
+                with patch('cloud_mail.build_opener', return_value=opener):
+                    with self.assertRaises(CloudThrottled):
+                        self.adapter.cloud_request(method, path, {'folder': 'Trash'})
+                self.assertEqual(opener.open.call_count, 1)
+                self.adapter._sleep.assert_not_called()
+
+    def test_read_server_error_is_not_repeated(self):
+        for status in (500, 503):
+            with self.subTest(status=status):
+                self.adapter._access_token, self.adapter._expires = 'access-secret', float('inf')
+                self.adapter._sleep = Mock()
+                opener, _ = self.http_failure(status, {'error': 'private provider detail'})
+                with patch('cloud_mail.build_opener', return_value=opener):
+                    with self.assertRaises(CloudServiceError) as result:
+                        self.adapter.cloud_request('GET', '/mailboxes/one/messages?folder=Inbox')
+                self.assertNotIsInstance(result.exception, CloudThrottled)
+                self.assertEqual(opener.open.call_count, 1)
+                self.adapter._sleep.assert_not_called()
 
     def test_network_errors_do_not_disclose_provider_details_or_look_like_expiry(self):
         for failure in (URLError('private host or credential detail'), TimeoutError('private timeout detail')):
