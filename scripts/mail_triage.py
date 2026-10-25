@@ -456,6 +456,10 @@ def main():
             state["last_run_date"] = today
             save_json(STATE_FILE, state)
 
+        # deterministic attention verdict (drives the cron's [SILENT] decision)
+        odd = [a for a in actions if a[2] in ("MOVE_FAILED", "NO_TARGET_FOLDER")]
+        actionable = bool(buckets["REVIEW"] or odd or proposals)
+        lines.append(f"ACTIONABLE: {'yes' if actionable else 'no'}")
         lines.append("AUDIT_LOG: " + AUDIT_LOG)
         print("\n".join(lines))
     finally:

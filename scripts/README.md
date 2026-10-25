@@ -26,6 +26,10 @@ JUNK / MARKETING / REVIEW:
 - Learns rules into `agent/triage_rules.json`, state in
   `agent/triage_state.json`, extraction candidates appended to
   `agent/knowledge_proposals.md`.
+- The report ends with `ACTIONABLE: yes|no`, worked out by the script rather
+  than the LLM: `yes` when anything waits in REVIEW, a move failed or had no
+  target folder, or there are extraction proposals. The job's digest stays
+  `[SILENT]` on `no`.
 - Run: `python3 mail_triage.py` (live) or `--dry-run` (classify only, no
   moves, no state/rule changes).
 
