@@ -3,6 +3,7 @@ import base64
 import hashlib
 import json
 import os
+import random
 import re
 import secrets
 import tempfile
@@ -34,8 +35,18 @@ class CloudServiceError(ValueError):
     pass
 
 
+class CloudThrottled(CloudServiceError):
+    """HTTP 429: the API refused the request before doing anything."""
+
+
 class CloudRequestError(ValueError):
     pass
+
+
+# The mailbox API admits about five requests a second across every client, so a
+# folder listing can be refused part-way. A refused read changed nothing: wait
+# and ask again. Changes are never repeated, so a send cannot go out twice.
+READ_RETRY_DELAYS = (0.5, 1, 2, 4)
 
 
 class NoRedirect(HTTPRedirectHandler):
@@ -49,6 +60,7 @@ class CloudMail:
         self._window = None
         self._lock = threading.RLock()
         self._access_token, self._expires = None, 0
+        self._sleep = time.sleep
 
     def _read(self):
         if not self._path.exists(): return {}
@@ -121,7 +133,9 @@ class CloudMail:
                 raise CloudSignInRequired('Your employee mailbox sign-in has expired. Reconnect employee mailboxes in Settings.') from None
             if exc.code == 403:
                 raise CloudAccessDenied('This sign-in cannot access the mailbox. Ask your administrator to check its assignment and permissions.') from None
-            if exc.code == 429 or exc.code >= 500:
+            if exc.code == 429:
+                raise CloudThrottled('Mailbox service is temporarily unavailable. Please try again. If sending, check Sent before retrying.') from None
+            if exc.code >= 500:
                 raise CloudServiceError('Mailbox service is temporarily unavailable. Please try again. If sending, check Sent before retrying.') from None
             raise CloudRequestError('Mailbox request was rejected. If sending, check Sent before retrying.') from None
         except (URLError, TimeoutError, OSError):
@@ -179,8 +193,15 @@ class CloudMail:
                 result = self._exchange(cfg, {'grant_type': 'refresh_token', 'refresh_token': refresh})
                 self._access_token = result['access_token']; self._expires = time.time() + result['expires_in'] - 30
             token = self._access_token
-        return self._fetch(cfg['api_url'] + path, method, json.dumps(data).encode() if data is not None else None,
-                           {'Authorization': 'Bearer ' + token, 'Content-Type': 'application/json'})
+        url, body = cfg['api_url'] + path, json.dumps(data).encode() if data is not None else None
+        headers = {'Authorization': 'Bearer ' + token, 'Content-Type': 'application/json'}
+        for delay in (READ_RETRY_DELAYS if method == 'GET' else ()):
+            try:
+                return self._fetch(url, method, body, headers)
+            except CloudThrottled:
+                # Jitter, so windows refused together do not all return together.
+                self._sleep(random.uniform(delay, delay * 1.5))
+        return self._fetch(url, method, body, headers)
 
     def cloud_logout(self):
         with self._lock:
