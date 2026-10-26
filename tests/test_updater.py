@@ -16,6 +16,11 @@ Covers the paths that bit real releases:
       detached children silently never ran); bad/truncated downloads are
       rejected BEFORE the app exits; a helper that dies on boot aborts the
       update with the app still running.
+  TD  .NET runtime config: every start uses its own bundled
+      runtimeconfig.json, never a path inherited from the process that
+      launched it (regression: the updater relaunch inherited the old app's
+      path into its deleted unpack folder, so v1.9.8's first start after
+      updating crashed with InvalidConfigFile)
   TF  finish_update (new-exe side): waits on the exe FILE lock, not on a
       hard-coded process name (regression: installs named SimpleMail-x64.exe
       never matched `Get-Process -Name SimpleMail`), swaps, relaunches; if
@@ -247,6 +252,34 @@ finally:
 check("TF-stuck: old exe untouched and still relaunched",
       f_target.read_bytes() == b"OLD-EXE"
       and len(popen_calls) == 1 and popen_calls[0][0] == [str(f_target)], str(popen_calls))
+
+# TD: the relaunched app must use its OWN runtimeconfig.json. The updater's
+# helper and the relaunched app inherit the previous process's environment,
+# whose config path lies in that process's unpack folder, gone once it exits.
+own_dir = SCRATCH / "own-bundle"
+own_dir.mkdir()
+(own_dir / "runtimeconfig.json").write_text("{}")
+own_rc = str(own_dir / "runtimeconfig.json")
+stale_rc = str(SCRATCH / "_MEI-previous-process" / "runtimeconfig.json")
+env_in = {"PYTHONNET_RUNTIME": "coreclr", "PYTHONNET_CORECLR_RUNTIME_CONFIG": stale_rc}
+m.use_bundled_dotnet_runtime(env_in, own_dir)
+check("TD: inherited runtime config path is replaced by the bundled one",
+      env_in["PYTHONNET_CORECLR_RUNTIME_CONFIG"] == own_rc, env_in["PYTHONNET_CORECLR_RUNTIME_CONFIG"])
+env_fresh = {}
+m.use_bundled_dotnet_runtime(env_fresh, own_dir)
+check("TD: a fresh start selects coreclr with the bundled config",
+      env_fresh == {"PYTHONNET_RUNTIME": "coreclr", "PYTHONNET_CORECLR_RUNTIME_CONFIG": own_rc}, str(env_fresh))
+if os.name == "nt":
+    # The real import path, started the way the updater relaunches the app
+    # (environment inherited, stale path set). APPDATA points at scratch.
+    probe = ("import os, sys; sys.modules['webview'] = type(sys)('fake_webview'); "
+             f"sys.path.insert(0, {str(REPO)!r}); import mailapp; "
+             "print(os.environ.get('PYTHONNET_CORECLR_RUNTIME_CONFIG'))")
+    p = subprocess.run([sys.executable, "-c", probe], capture_output=True, text=True, timeout=120,
+                       env={**os.environ, "PYTHONNET_CORECLR_RUNTIME_CONFIG": stale_rc, "APPDATA": str(SCRATCH)})
+    seen = p.stdout.strip().splitlines()[-1:] if p.stdout.strip() else []
+    check("TD: importing the app over an inherited stale path uses its own runtimeconfig.json",
+          seen == [str(REPO / "runtimeconfig.json")], f"rc={p.returncode} out={seen} err={p.stderr.strip()[-200:]}")
 
 # TF-dispatch: `exe --finish-update <target> <pid>` reaches finish_update
 # before any config/GUI work (the helper must never open a window)
