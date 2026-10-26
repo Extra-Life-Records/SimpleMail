@@ -40,14 +40,25 @@ from cloud_mail import (CloudSignInRequired, CloudAccessDenied, CloudConfigurati
 
 _BASE_DIR = Path(__file__).resolve().parent
 
+
+def use_bundled_dotnet_runtime(environ, base_dir):
+    """Force pythonnet to use the .NET Core WindowsDesktop runtime (contains
+    WinForms, which pywebview needs). Without this, pythonnet loads the
+    console runtime and System.Windows.Forms is missing.
+
+    Always point at THIS copy's runtimeconfig.json. An app relaunched by the
+    updater inherits the previous process's environment, whose path lies in
+    that process's unpack folder, deleted as it exits. Keeping it crashed the
+    first start after updating to v1.9.8 with InvalidConfigFile.
+    """
+    environ.setdefault("PYTHONNET_RUNTIME", "coreclr")
+    rc = Path(base_dir) / "runtimeconfig.json"
+    if rc.exists():
+        environ["PYTHONNET_CORECLR_RUNTIME_CONFIG"] = str(rc)
+
+
 if os.name == "nt":
-    # Force pythonnet to use the .NET Core WindowsDesktop runtime (contains
-    # WinForms, which pywebview needs). Without this, pythonnet loads the
-    # console runtime and System.Windows.Forms is missing.
-    os.environ.setdefault("PYTHONNET_RUNTIME", "coreclr")
-    _rc = _BASE_DIR / "runtimeconfig.json"
-    if _rc.exists():
-        os.environ.setdefault("PYTHONNET_CORECLR_RUNTIME_CONFIG", str(_rc))
+    use_bundled_dotnet_runtime(os.environ, _BASE_DIR)
 
 try:
     import webview
@@ -58,7 +69,7 @@ else:
     _WEBVIEW_IMPORT_ERROR = None
 
 APP_NAME = "SimpleMail"
-APP_VERSION = "1.9.8"
+APP_VERSION = "1.9.9"
 APP_REPO = "Extra-Life-Records/SimpleMail"  # owner/repo for auto-updates
 CONFIG_DIR = Path(os.environ.get("APPDATA", str(Path.home()))) / APP_NAME
 CONFIG_FILE = CONFIG_DIR / "config.json"
