@@ -7,6 +7,7 @@ import time
 
 import boto3
 import service
+from botocore.exceptions import ClientError
 
 
 def dispatch(table, s3, ses, claims, path, data):
@@ -40,6 +41,12 @@ def api(event, context):
         status, result = 403, {'error': 'Manual sending is disabled or this session is not authorized'}
     except (ValueError, KeyError, TypeError):
         status, result = 400, {'error': 'Invalid manual message request'}
+    except ClientError as exc:
+        # Operator diagnostics contain only the AWS error, never the message
+        # payload, session token or headers. The client still reconciles by ID.
+        print(json.dumps({'manual_send_error': exc.response.get('Error', {}),
+                          'aws_request_id': exc.response.get('ResponseMetadata', {}).get('RequestId')}))
+        status, result = 503, {'error': 'Check the existing send reference before any retry'}
     except Exception:
         status, result = 503, {'error': 'Check the existing send reference before any retry'}
     return {'statusCode': status, 'headers': {'Content-Type': 'application/json', 'Cache-Control': 'no-store'},

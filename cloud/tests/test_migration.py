@@ -234,6 +234,32 @@ class MigrationTests(unittest.TestCase):
             result = service.send(self.table, self.s3, ses, service.meta(self.table, 'one'), 'owner', data)
         self.assertEqual(result['status'], 'uncertain'); ses.send_email.assert_not_called()
 
+    def test_manual_numbered_mailbox_and_html_reply_with_inline_image(self):
+        from email import message_from_bytes
+        claims = {'sub':'owner','client_id':'owner-client','token_use':'access','scope':'openid','exp':int(time.time())+300}
+        data = {'to':'recipient@example.com','bcc':'private@example.com','body':'Reply',
+                'body_html':'<p>Reply</p><img src="data:image/png;base64,YWJj">',
+                'in_reply_to':'<original@example.com>','references':'<original@example.com>',
+                'attachments':[{'name':'sample.txt','data':'dGVzdA=='}], 'request_id':'manual-numbered-12345'}
+        ses = Mock(); ses.send_email.return_value = {'MessageId':'ses-accepted'}
+        with patch.dict(os.environ, HUMAN_SENDING_ENABLED='true', HUMAN_SENDER_ADDRESSES='one@extraliferecords.com'):
+            result = human_send.dispatch(self.table,self.s3,ses,claims,'/human/mailboxes/one/send',data)
+        self.assertEqual(result['status'],'accepted')
+        msg = message_from_bytes(ses.send_email.call_args.kwargs['Content']['Raw']['Data'])
+        self.assertEqual(msg['From'],'one@extraliferecords.com')
+        self.assertEqual(msg['In-Reply-To'],'<original@example.com>')
+        self.assertIsNone(msg['Bcc'])
+        self.assertEqual(len([p for p in msg.walk() if p.get('Content-ID')]),1)
+        self.assertIn('private@example.com',ses.send_email.call_args.kwargs['Destination']['ToAddresses'])
+        self.assertNotIn('',ses.send_email.call_args.kwargs['Destination']['ToAddresses'])
+
+    def test_manual_blank_cc_and_bcc_are_not_envelope_recipients(self):
+        ses = Mock(); ses.send_email.return_value = {'MessageId':'ses-accepted'}
+        data = {'to':'recipient@example.com','body':'Body','cc':'','bcc':'','request_id':'manual-empty-cc-bcc-1234'}
+        with patch.dict(os.environ,HUMAN_SENDING_ENABLED='true',HUMAN_SENDER_ADDRESSES='one@extraliferecords.com'):
+            service.send(self.table,self.s3,ses,service.meta(self.table,'one'),'owner',data,human=True)
+        self.assertEqual(ses.send_email.call_args.kwargs['Destination'],{'ToAddresses':['recipient@example.com']})
+
     def test_stack_guard_blocks_each_replacement_send_switch(self):
         session = Mock()
         baseline = {'SendingEnabled':'false','AiSendingEnabled':'false','HumanSendingEnabled':'false',

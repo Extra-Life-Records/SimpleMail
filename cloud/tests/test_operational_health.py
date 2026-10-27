@@ -134,6 +134,16 @@ class SnapshotTests(unittest.TestCase):
         self.assertEqual(next(r for r in result['checks'] if r['kind'] == 'sending')['flags']['manual'], 'enabled')
         self.clients['lambda'].get_function_configuration.assert_called_once_with(FunctionName='mcp')
 
+    def test_approved_manual_sending_does_not_allow_ai_or_general_drift(self):
+        config = {**CONFIG, 'owner_manual_sending_enabled': True}
+        with patch.dict(os.environ, OPERATIONAL_HEALTH_CONFIG=json.dumps(config), HUMAN_SENDING_ENABLED='true'):
+            self.assertEqual(self.snapshot()['status'], 'clear')
+            with patch.dict(os.environ, SENDING_ENABLED='true'):
+                self.assertEqual(self.snapshot()['status'], 'attention')
+            variables = self.clients['lambda'].get_function_configuration.return_value['Environment']['Variables']
+            variables['AI_SENDING_ENABLED'] = 'true'
+            self.assertEqual(self.snapshot()['status'], 'attention')
+
     def test_unconfigured_or_invalid_config_never_calls_aws(self):
         for value in ('{}', '[]', '{broken', json.dumps({**CONFIG, 'queues': [None, None]})):
             with patch.dict(os.environ, OPERATIONAL_HEALTH_CONFIG=value):

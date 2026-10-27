@@ -277,7 +277,7 @@ def send(table, s3, ses, item, subject, data, *, human=False):
             if not isinstance(value, str) or len(value) > maximum or (field != 'body_html' and any(c in value for c in '\r\n')):
                 raise ValueError('Invalid manual message field')
             draft[field] = value
-    recipients = [addr for _, addr in getaddresses([draft[k] for k in ('to', 'cc', 'bcc')])]
+    recipients = [addr for _, addr in getaddresses([draft[k] for k in ('to', 'cc', 'bcc') if draft[k]]) if addr]
     if not recipients or len(recipients) > 20: raise ValueError('Specify 1 to 20 recipients')
     digest_payload = {**draft, 'reply_id': data.get('reply_id')}
     if human: digest_payload['human'] = True
@@ -305,9 +305,12 @@ def send(table, s3, ses, item, subject, data, *, human=False):
         original = parse(read_raw(s3, parent))
         if original['message_id']:
             msg['In-Reply-To'] = original['message_id']; msg['References'] = original['message_id']
-    msg.set_content(draft['body'])
     if human:
-        if draft['body_html']: msg.add_alternative(draft['body_html'], subtype='html')
+        from manual_body import set_message_body
+        set_message_body(msg, draft['body'], draft['body_html'])
+    else:
+        msg.set_content(draft['body'])
+    if human:
         if not reply and draft['in_reply_to']: msg['In-Reply-To'] = draft['in_reply_to']
         if not reply and draft['references']: msg['References'] = draft['references']
     for attachment in draft['attachments']:

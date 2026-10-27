@@ -31,6 +31,10 @@ Parameters:
     Default: 'false'
     AllowedValues: ['true', 'false']
     Description: Separate manual-owner London SES route. Leave disabled until explicitly authorized and sender identities verified.
+  HumanSenderAddresses:
+    Type: CommaDelimitedList
+    Default: ''
+    Description: Exact existing mailbox sender identities approved for owner-controlled mail. Empty denies every sender.
   McpResourceUrl:
     Type: String
     Default: https://localhost.invalid/mcp
@@ -329,7 +333,9 @@ Resources:
         Variables:
           HUMAN_SENDING_ENABLED: !Ref HumanSendingEnabled
           OWNER_CLIENT_ID: !Ref Client
-          HUMAN_SENDER_ADDRESSES: 'hello@extraliferecords.com,pippy@extraliferecords.com,playloudr@extraliferecords.com,hello@meandtherobots.com,hello@lightspeedruinedtamworth.co.uk'
+          HUMAN_SENDER_ADDRESSES: !Join [',', !Ref HumanSenderAddresses]
+          SENDING_ENABLED: 'false'
+          CONFIGURATION_SET: ''
       Policies:
         - Statement:
             - Effect: Allow
@@ -340,7 +346,7 @@ Resources:
               Resource: !GetAtt MailTable.Arn
               Condition:
                 ForAllValues:StringLike:
-                  dynamodb:LeadingKeys: ['mail-*#*']
+                  dynamodb:LeadingKeys: ['one#*', 'two#*', 'three#*', 'four#*', 'five#*', 'mail-*#*']
             - Effect: Allow
               Action: s3:GetObject
               Resource: !Sub '${MailBucket.Arn}/*'
@@ -348,14 +354,14 @@ Resources:
               Action: s3:PutObject
               Resource: !Sub '${MailBucket.Arn}/sent/*'
             - Effect: Allow
-              Action: ses:SendEmail
+              Action: [ses:SendEmail, ses:SendRawEmail]
               Resource:
                 - !Sub 'arn:aws:ses:eu-west-2:${AWS::AccountId}:identity/extraliferecords.com'
                 - !Sub 'arn:aws:ses:eu-west-2:${AWS::AccountId}:identity/meandtherobots.com'
                 - !Sub 'arn:aws:ses:eu-west-2:${AWS::AccountId}:identity/lightspeedruinedtamworth.co.uk'
               Condition:
                 StringEquals:
-                  ses:FromAddress: ['hello@extraliferecords.com', 'pippy@extraliferecords.com', 'playloudr@extraliferecords.com', 'hello@meandtherobots.com', 'hello@lightspeedruinedtamworth.co.uk']
+                  ses:FromAddress: !Ref HumanSenderAddresses
       Events:
         Send: {Type: HttpApi, Properties: {ApiId: !Ref HttpApi, Path: '/human/mailboxes/{proxy+}', Method: POST}}
   WebFunction:
