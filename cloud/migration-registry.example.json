@@ -4,6 +4,7 @@
   "three": {"aliases": []},
   "four": {"aliases": []},
   "five": {"aliases": []},
+  "mail-adam": {"address": "adam@extraliferecords.com"},
   "mail-elr": {"address": "hello@extraliferecords.com"},
   "mail-pippy": {"address": "pippy@extraliferecords.com"},
   "mail-playloudr": {"address": "playloudr@extraliferecords.com"},

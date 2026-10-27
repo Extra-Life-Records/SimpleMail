@@ -54,6 +54,21 @@ domain/region and rule ordering before enabling routes; no domain wildcard or
 catch-all is created. An unknown recipient encountered by the receiver now fails
 for retry/dead-letter reconciliation instead of silently disappearing.
 
+### Live receiving addresses (eu-west-1 stack `playloudr-reserved-mail`)
+
+The live stack does not use `AdditionalReceiptRule` yet. Its migrated addresses sit in
+a hand-deployed rule, `playloudr-migration-prepared`, whose recipient list is fixed in
+the deployed template. As of 27 Oct 2026 that rule receives:
+
+adam, dizzyteapot, five, four, hello, one, playloudr, three and two @extraliferecords.com,
+hello@meandtherobots.com and hello@lightspeedruinedtamworth.co.uk.
+
+`adam@extraliferecords.com` (mailbox `mail-adam`, state Reserved) was added on 27 Oct 2026
+by adding it to that rule, adding `mail-adam` to the stack's `MailboxRegistry` parameter
+and creating its `META` row. A deploy of this repository's `template.yaml` replaces the
+hand-deployed rule. Before such a deploy, set `AdditionalReceiveRecipients` to every
+address above and `MailboxRegistry` to match, or those addresses stop receiving.
+
 ## Private backup format and verification
 
 The importer consumes schema-version-1 archives produced by the read-only migration
