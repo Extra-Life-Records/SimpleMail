@@ -354,7 +354,7 @@ Resources:
               Action: s3:PutObject
               Resource: !Sub '${MailBucket.Arn}/sent/*'
             - Effect: Allow
-              Action: ses:SendEmail
+              Action: [ses:SendEmail, ses:SendRawEmail]
               Resource:
                 - !Sub 'arn:aws:ses:eu-west-2:${AWS::AccountId}:identity/extraliferecords.com'
                 - !Sub 'arn:aws:ses:eu-west-2:${AWS::AccountId}:identity/meandtherobots.com'
