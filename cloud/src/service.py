@@ -277,7 +277,7 @@ def send(table, s3, ses, item, subject, data, *, human=False):
             if not isinstance(value, str) or len(value) > maximum or (field != 'body_html' and any(c in value for c in '\r\n')):
                 raise ValueError('Invalid manual message field')
             draft[field] = value
-    recipients = [addr for _, addr in getaddresses([draft[k] for k in ('to', 'cc', 'bcc')]) if addr]
+    recipients = [addr for _, addr in getaddresses([draft[k] for k in ('to', 'cc', 'bcc') if draft[k]]) if addr]
     if not recipients or len(recipients) > 20: raise ValueError('Specify 1 to 20 recipients')
     digest_payload = {**draft, 'reply_id': data.get('reply_id')}
     if human: digest_payload['human'] = True
