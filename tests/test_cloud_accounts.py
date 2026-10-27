@@ -139,13 +139,35 @@ class UnifiedInboxTests(unittest.TestCase):
         with self.assertRaises(ValueError): self.api.get_message('cloud:one','Inbox','../two')
         self.transport.cloud_request.assert_not_called()
 
-    def test_cloud_draft_recovery_is_account_scoped_and_send_gate_preserves_it(self):
+    def test_cloud_draft_recovery_is_account_scoped_and_manual_send_is_claimed_once(self):
         draft = self.api.save_compose_draft('cloud:one', '12345678-1234-1234-1234-123456789abc', 0, 'a@example.com','Test','Body','Body')
         self.assertEqual(len(self.api.list_compose_drafts('cloud:one')), 1)
         self.assertEqual(self.api.list_compose_drafts('cloud:two'), [])
-        with self.assertRaisesRegex(ValueError, 'not enabled'):
+        self.transport.cloud_request.return_value = {'status':'accepted', 'provider_id':'ses-fixture'}
+        self.assertEqual(self.api.send_compose_draft('cloud:one', draft['id'], draft['revision'])['status'], 'sent')
+        args = self.transport.cloud_request.call_args.args
+        self.assertEqual(args[:2], ('POST', '/human/mailboxes/one/send'))
+        self.assertEqual(args[2]['request_id'], draft['id'])
+        with self.assertRaisesRegex(ValueError, 'already submitted'):
             self.api.send_compose_draft('cloud:one', draft['id'], draft['revision'])
-        self.assertEqual(self.api.get_compose_draft('cloud:one', draft['id'])['status'], 'pending')
+        self.assertEqual(self.api.get_compose_draft('cloud:one', draft['id'])['status'], 'sent')
+        self.transport.cloud_request.assert_called_once()
+
+    def test_manual_lost_response_reconciles_without_second_post(self):
+        draft = self.api.save_compose_draft('cloud:one', '12345678-1234-1234-1234-123456789abc', 0, 'a@example.com','Test','Body','<b>Body</b>', in_reply_to='<parent@example.com>', references='<parent@example.com>')
+        self.transport.cloud_request.side_effect = [TimeoutError(), {'status':'accepted'}]
+        self.assertEqual(self.api.send_compose_draft('cloud:one', draft['id'], draft['revision'])['status'], 'sent')
+        calls = self.transport.cloud_request.call_args_list
+        self.assertEqual([c.args[0] for c in calls], ['POST', 'GET'])
+        self.assertEqual(calls[0].args[2]['in_reply_to'], '<parent@example.com>')
+        self.assertEqual(calls[1].args[1], '/mailboxes/one/sends/' + draft['id'])
+
+    def test_manual_uncertain_result_preserves_draft_without_retry(self):
+        draft = self.api.save_compose_draft('cloud:one', '12345678-1234-1234-1234-123456789abc', 0, 'a@example.com','Test','Body','Body')
+        self.transport.cloud_request.side_effect = [TimeoutError(), {'status':'uncertain'}]
+        self.assertEqual(self.api.send_compose_draft('cloud:one', draft['id'], draft['revision'])['status'], 'uncertain')
+        with self.assertRaises(ValueError): self.api.send_compose_draft('cloud:one', draft['id'], draft['revision'])
+        self.assertEqual(self.api.get_compose_draft('cloud:one', draft['id'])['status'], 'uncertain')
 
     def test_discovery_failure_does_not_remove_existing_imap_accounts(self):
         self.transport.cloud_request.side_effect = ValueError('expired session')

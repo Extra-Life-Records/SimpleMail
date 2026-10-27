@@ -305,9 +305,12 @@ def send(table, s3, ses, item, subject, data, *, human=False):
         original = parse(read_raw(s3, parent))
         if original['message_id']:
             msg['In-Reply-To'] = original['message_id']; msg['References'] = original['message_id']
-    msg.set_content(draft['body'])
     if human:
-        if draft['body_html']: msg.add_alternative(draft['body_html'], subtype='html')
+        from manual_body import set_message_body
+        set_message_body(msg, draft['body'], draft['body_html'])
+    else:
+        msg.set_content(draft['body'])
+    if human:
         if not reply and draft['in_reply_to']: msg['In-Reply-To'] = draft['in_reply_to']
         if not reply and draft['references']: msg['References'] = draft['references']
     for attachment in draft['attachments']:

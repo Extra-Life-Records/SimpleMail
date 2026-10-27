@@ -182,7 +182,9 @@ class CloudMail:
         return {'ok': True}
 
     def cloud_request(self, method, path, data=None):
-        if method not in ('GET', 'POST', 'PATCH') or not re.fullmatch(r'/mailboxes(?:/[a-z0-9_/-]+)?(?:\?[^#\r\n]*)?', path):
+        mailbox_path = re.fullmatch(r'/mailboxes(?:/[a-z0-9_/-]+)?(?:\?[^#\r\n]*)?', path)
+        manual_send = method == 'POST' and re.fullmatch(r'/human/mailboxes/[a-z0-9-]+/send', path)
+        if method not in ('GET', 'POST', 'PATCH') or not (mailbox_path or manual_send):
             raise ValueError('Invalid mailbox request')
         with self._lock:
             cfg = self._read(); self.validate(cfg)

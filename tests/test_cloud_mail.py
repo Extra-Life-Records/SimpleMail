@@ -143,7 +143,7 @@ class CloudAdapterTests(unittest.TestCase):
                              sum(READ_RETRY_DELAYS) * 1.5)
 
     def test_throttled_change_is_never_repeated(self):
-        for method, path in (('POST', '/mailboxes/one/send'), ('PATCH', '/mailboxes/one/messages/abc')):
+        for method, path in (('POST', '/mailboxes/one/send'), ('POST', '/human/mailboxes/one/send'), ('PATCH', '/mailboxes/one/messages/abc')):
             with self.subTest(method=method):
                 self.adapter._access_token, self.adapter._expires = 'access-secret', float('inf')
                 self.adapter._sleep = Mock()
@@ -203,16 +203,25 @@ class CloudAdapterTests(unittest.TestCase):
         for path in ('https://attacker.example.com','//attacker.example.com','/mailboxes/../admin','/admin'):
             with self.assertRaises(ValueError):self.adapter.cloud_request('GET',path)
     def test_desktop_login_receives_real_http_callback(self):
+        from http.server import HTTPServer
+        from urllib.request import Request
         callbacks = []
+        servers = []
+        def test_server(address, handler):
+            self.assertEqual(address, ('127.0.0.1', 8765))
+            server = HTTPServer(('127.0.0.1', 0), handler)
+            servers.append(server)
+            return server
         def launch(url):
             state = parse_qs(urlsplit(url).query)['state'][0]
             def callback():
-                with urlopen('http://localhost:8765/callback?state=' + state + '&code=fixture-code', timeout=5) as response:
+                request = Request('http://127.0.0.1:' + str(servers[0].server_port) + '/callback?state=' + state + '&code=fixture-code', headers={'Host':'localhost:8765'})
+                with urlopen(request, timeout=5) as response:
                     callbacks.append(response.status)
             worker = threading.Thread(target=callback)
             worker.start()
             self.addCleanup(worker.join, 6)
-        with patch('cloud_mail.webbrowser.open', side_effect=launch), patch('cloud_mail.protect', return_value='protected'), patch.object(self.adapter, '_exchange', return_value={'refresh_token':'refresh','access_token':'access','expires_in':300}) as exchange:
+        with patch('cloud_mail.HTTPServer', side_effect=test_server), patch('cloud_mail.webbrowser.open', side_effect=launch), patch('cloud_mail.protect', return_value='protected'), patch.object(self.adapter, '_exchange', return_value={'refresh_token':'refresh','access_token':'access','expires_in':300}) as exchange:
             self.assertEqual(self.adapter.cloud_login(), {'ok':True})
             self.assertEqual(exchange.call_args.args[1]['code'], 'fixture-code')
             self.assertEqual(self.adapter._read()['refresh_token'], {'windows_dpapi':'protected'})

@@ -182,12 +182,54 @@ class CloudAccounts:
         return {**context, 'subject': row.get('subject', ''), 'sender': row.get('sender', ''),
                 'date': row.get('date', ''), 'text': row.get('body', ''), 'attachments': attachments}
 
-    def send_compose_draft(self, account, *args, **kwargs):
-        # Preserve the local draft and avoid claiming a send until regional SES
-        # production access and sender authentication are enabled and verified.
-        raise ValueError('Sending is not enabled for this mailbox yet. Your draft is saved.')
+    def send_compose_draft(self, account, draft_id, revision):
+        from mailbox_agent import recipients
+        import json
+        if account not in self.accounts:
+            raise ValueError('Mailbox is not available to this sign-in')
+        store = self.owner._compose_store()
+        draft = store.get(account, draft_id)
+        payload = draft['payload']
+        if not payload['to'].strip():
+            raise ValueError('Enter a recipient before sending')
+        for field in ('to', 'cc', 'bcc'):
+            recipients(payload.get(field, ''))
+        attachments = self.owner._attachment_store().resolve(account, payload.get('attachment_ids', []))
+        if len(attachments) > 10 or sum(len(a['data']) for a in attachments) > 3 * 1024 * 1024:
+            raise ValueError('Use at most 10 attachments, totalling 3 MB')
+        data = {key: payload.get(key, '') for key in
+                ('to', 'cc', 'bcc', 'subject', 'body', 'body_html', 'in_reply_to', 'references')}
+        data['request_id'] = draft_id
+        data['attachments'] = [{'name': a['name'], 'data': base64.b64encode(a['data']).decode()} for a in attachments]
+        if len(json.dumps(data).encode()) > 4400000:
+            raise ValueError('Message is too large. Reduce its attachments or signature images.')
+        # Claim the exact reviewed revision before any network send. A crash,
+        # timeout or second click must never manufacture another request ID.
+        store.claim(account, draft_id, revision)
+        try:
+            result = self.transport.cloud_request('POST', '/human/mailboxes/' + account[len(PREFIX):] + '/send', data)
+            if result.get('status') not in ('accepted', 'delivered'):
+                raise ValueError('Send not confirmed')
+        except Exception:
+            # A lost POST response can be reconciled by a read, never a resend.
+            try:
+                result = self.request(account, 'GET', '/sends/' + draft_id)
+            except Exception:
+                result = {}
+            if result.get('status') not in ('accepted', 'delivered'):
+                detail = {'warning': 'Sending could not be confirmed. Check Sent before trying again. '
+                          'This draft will not be sent again automatically.', 'request_id': draft_id}
+                store.finish(account, draft_id, 'uncertain', detail)
+                return {'status': 'uncertain', **detail}
+        store.finish(account, draft_id, 'sent', {'request_id': draft_id, 'provider_id': result.get('provider_id', '')})
+        return {'status': 'sent', 'sent_as': self.accounts[account]['identity'],
+                'request_id': draft_id, 'provider_status': result['status']}
 
-    send_mail = send_compose_draft
+    def send_mail(self, account, to, subject, body, body_html=None):
+        # Compatibility callers also use a durable draft, never a bare POST.
+        import uuid
+        draft = self.owner.save_compose_draft(account, str(uuid.uuid4()), 0, to, subject, body, body_html or '')
+        return self.send_compose_draft(account, draft['id'], draft['revision'])
 
     def create_folder(self, account, name):
         raise ValueError('This mailbox supports Inbox, Sent, Drafts, Junk and Trash.')

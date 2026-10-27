@@ -104,8 +104,14 @@ def snapshot(client_factory=None):
                  'manual': flag(os.environ.get('HUMAN_SENDING_ENABLED')),
                  'ai': flag(variables.get('AI_SENDING_ENABLED')),
                  'ai_transport': flag(variables.get('SENDING_ENABLED'))}
-        status = 'attention' if 'enabled' in flags.values() else ('unknown' if 'unknown' in flags.values() else 'clear')
-        return {'status': status, 'flags': flags}
+        expected = {name: 'disabled' for name in flags}
+        # Only manual owner mail may be deliberately enabled. Never bless AI
+        # or general transport drift through an operator configuration value.
+        if config.get('owner_manual_sending_enabled') is True:
+            expected['manual'] = 'enabled'
+        status = ('unknown' if 'unknown' in flags.values() else
+                  'clear' if flags == expected else 'attention')
+        return {'status': status, 'flags': flags, 'expected': expected}
 
     jobs = [('queue', row['label'], lambda row=row: queue(row)) for row in config['queues']]
     jobs += [('alarm', row['label'], lambda row=row: alarm(row)) for row in config['alarms']]
