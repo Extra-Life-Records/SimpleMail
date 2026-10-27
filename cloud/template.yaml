@@ -358,6 +358,7 @@ Resources:
               Resource:
                 - !Sub 'arn:aws:ses:eu-west-2:${AWS::AccountId}:identity/extraliferecords.com'
                 - !Sub 'arn:aws:ses:eu-west-2:${AWS::AccountId}:identity/hello@extraliferecords.com'
+                - !Sub 'arn:aws:ses:eu-west-2:${AWS::AccountId}:configuration-set/my-first-configuration-set'
                 - !Sub 'arn:aws:ses:eu-west-2:${AWS::AccountId}:identity/meandtherobots.com'
                 - !Sub 'arn:aws:ses:eu-west-2:${AWS::AccountId}:identity/lightspeedruinedtamworth.co.uk'
               Condition:
