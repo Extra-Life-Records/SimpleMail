@@ -88,7 +88,6 @@ drop it in your Start menu, or copy it to any machine **without Python**.
 ```
 py -3 -m pip install pyinstaller
 py -3 patch_pywebview.py
-py -3 make_icon.py
 py -3 -m PyInstaller --noconfirm --clean --onefile --windowed --name SimpleMail ^
     --icon assets\icon.ico ^
     --add-data "web;web" --add-data "assets;assets" --add-data "runtimeconfig.json;." ^
@@ -169,7 +168,7 @@ web/index.html        Frontend (Pico CSS)
 web/app.js            Frontend logic
 web/pico.min.css      Design framework (local, no CDN)
 patch_pywebview.py    One-time pywebview/.NET Core compat patch (idempotent)
-make_icon.py          Generates assets/icon.ico
+assets/icon.ico       App icon (made with the toolbelt's icons/make.js, shared look with the other tools)
 runtimeconfig.json    .NET Core WindowsDesktop runtime config for pythonnet
 run.bat               Launcher (applies patch, starts app)
 build.bat             One-click .exe builder
