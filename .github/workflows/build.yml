@@ -41,11 +41,10 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Install packaging dependencies
         run: python -m pip install pywebview==5.3.2 pythonnet==3.0.5 bottle==0.13.4 pillow==12.3.0 cffi==2.1.1 pyinstaller==6.22.3
-      - name: Prepare desktop runtime and icon
+      - name: Prepare desktop runtime
         run: |
           python patch_pywebview.py
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          python make_icon.py
       - name: Build desktop and console agent
         run: |
           python -m PyInstaller --noconfirm --clean --onefile --windowed --name SimpleMail --icon assets/icon.ico --add-data "web;web" --add-data "cloud/src/static;cloud/src/static" --add-data "assets;assets" --add-data "runtimeconfig.json;." --hidden-import webview.platforms.winforms mailapp.py

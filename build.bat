@@ -22,8 +22,6 @@ if %errorlevel% neq 0 (
     %PY% -m pip install pyinstaller
 )
 
-%PY% make_icon.py
-
 %PY% -m PyInstaller --noconfirm --clean --onefile --windowed ^
     --name SimpleMail ^
     --icon assets\icon.ico ^
