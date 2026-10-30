@@ -61,7 +61,8 @@ owner's x64 machine and is published with native x64 and ARM64 downloads.
   notification). Open Screener's senders panel and press **Let in** to trust a sender and
   move its mail back. Works while SimpleMail is open; older mail is left alone.
 - ✅ **Outlook.com / Hotmail / Live mailboxes** — Settings → + Add Microsoft account signs in
-  with Microsoft (Microsoft no longer accepts passwords for these mailboxes)
+  with Microsoft (Microsoft no longer accepts passwords for these mailboxes). Outlook's server
+  only searches plain letters, so words with accents or symbols such as é or £ can't be searched there
 - ✅ Credentials protected with Windows DPAPI; settings stored locally in `%APPDATA%\SimpleMail`
 - ✅ Connection test button in Settings
 - ✅ Native ARM64 and x64 builds from the same codebase

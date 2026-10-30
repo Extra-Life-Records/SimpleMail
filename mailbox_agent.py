@@ -49,6 +49,7 @@ class MailboxAgent:
         self.cfg, self.store, self.account_id = cfg, store, account_id
         self.owner_access = owner_access
         self.action_guard = None  # Bound worker claim; external MCP leaves this unset.
+        self.utf8_search_refused = False  # Outlook.com: later folders skip the refused CHARSET.
         cfg.account(account_id)  # fail closed; never use the active-account fallback
         if connector is None:
             from mailapp import connect_imap
@@ -131,7 +132,10 @@ class MailboxAgent:
 
     def folders(self):
         with self.connection() as (_, folders):
-            return {"folders": list(dict.fromkeys(["INBOX"] + folders))}
+            # INBOX is case-insensitive. Keep the server's spelling (Outlook.com lists "Inbox"),
+            # so the inbox is searched once and results name the folder the app shows.
+            inbox = next((name for name in folders if name.upper() == "INBOX"), "INBOX")
+            return {"folders": list(dict.fromkeys([inbox] + [name for name in folders if name.upper() != "INBOX"]))}
 
     @staticmethod
     def select(imap, folder):
@@ -188,9 +192,7 @@ class MailboxAgent:
                 criteria = f'OR HEADER Message-ID {quoted_id} OR HEADER References {quoted_id} HEADER In-Reply-To {quoted_id}'
                 typ, data = imap.uid("search", None, criteria)
             elif query:
-                # Literal avoids allowing text to become IMAP search operators.
-                imap.literal = query.encode("utf-8")
-                typ, data = imap.uid("search", "CHARSET", "UTF-8", *(("UNSEEN",) if unseen else ()), "TEXT")
+                typ, data = self.text_search(imap, query, unseen)
             else:
                 typ, data = imap.uid("search", None, "UNSEEN" if unseen else "ALL")
             if typ != "OK" or not data or data[0] is None:
@@ -228,6 +230,24 @@ class MailboxAgent:
                                 "before": page[-1]}) if len(remaining) > limit else None
             return {"items": items, "total_matches": total, "next_cursor": next_cursor,
                     "scope": "complete_folder", "untrusted_content": True}
+
+    def text_search(self, imap, query, unseen):
+        """TEXT search sent as a literal, so the text cannot become IMAP search operators.
+        CHARSET UTF-8 is optional in IMAP and Outlook.com refuses it with NO [BADCHARSET (US-ASCII)].
+        Plain ASCII text means the same without CHARSET. Other text sent that way matches
+        the wrong messages on Outlook.com, so it is refused in words instead."""
+        keys = ("UNSEEN", "TEXT") if unseen else ("TEXT",)
+        if not (query.isascii() and self.utf8_search_refused):
+            imap.literal = query.encode("utf-8")
+            typ, data = imap.uid("search", "CHARSET", "UTF-8", *keys)
+            if not (typ == "NO" and data and b"BADCHARSET" in bytes(data[0] or b"").upper()):
+                return typ, data
+            self.utf8_search_refused = True
+            if not query.isascii():
+                raise ValueError("This mailbox can't search for accented letters or symbols such as é, £ or ’. "
+                                 "Search again using plain letters.")
+        imap.literal = query.encode("ascii")  # imaplib clears the literal once it is sent.
+        return imap.uid("search", None, *keys)
 
     def search_all(self, query="", cursor=None, limit=25, include_junk_trash=False, header_id=None):
         """Bounded folder-by-folder traversal; cursors retain folder and query scope."""

@@ -51,6 +51,28 @@ class SearchServer:
         assert spec == '(UID FLAGS)' or 'BODY.PEEK' in spec
 
 
+class OutlookSearchServer(SearchServer):
+    """Outlook.com: search text must be US-ASCII, so any CHARSET UTF-8 search is refused.
+    Its folder list names the inbox "Inbox", which selects the same folder as INBOX."""
+    folders = ['Archive', 'Inbox', 'Junk', 'Trash']
+    mail = {'INBOX': {4: b'Quote from luca@cdclick.it', 9: b'Newsletter', 12: b'CDCLICK order 57098'},
+            'Archive': {2: b'Old cdclick invoice'}, 'Junk': {}, 'Trash': {}}
+
+    def select(self, folder, readonly=True):
+        return super().select('"INBOX"' if folder.upper() == '"INBOX"' else folder, readonly)
+
+    def uid(self, command, *args):
+        if command != 'search':
+            return super().uid(command, *args)
+        self.calls.append((self.folder, command, args))
+        literal, self.literal = self.literal, None  # imaplib sends a literal with one command only
+        if 'CHARSET' in args:
+            return 'NO', [b'[BADCHARSET (US-ASCII)] The specified charset is not supported.']
+        assert args == (None, 'TEXT') and isinstance(literal, bytes) and literal.isascii(), (args, literal)
+        return 'OK', [b' '.join(str(uid).encode() for uid, text in self.mail[self.folder].items()
+                                if literal.lower() in text.lower())]
+
+
 class OwnerSearchTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
@@ -87,6 +109,31 @@ class OwnerSearchTests(unittest.TestCase):
         self.assertTrue(all(self.server.readonly))
         self.assertFalse(self.store.profile('one')['enabled'])
         self.assertFalse(any(call[1] == 'store' for call in self.server.calls))
+
+    def test_outlook_refusing_utf8_still_finds_plain_words_in_every_folder_once(self):
+        server = OutlookSearchServer()
+        self.connector.return_value = (server, server.folders, None)
+        page = self.api.search_messages('one', 'cdclick')
+        # The inbox is searched once, under the name the folder list shows.
+        self.assertEqual([(item['server_folder'], item['server_uid']) for item in page['items']],
+                         [('Inbox', '12'), ('Inbox', '4'), ('Archive', '2')])
+        self.assertEqual(page['searched_folders'], ['Inbox', 'Archive'])
+        self.assertIsNone(page['next_cursor'])
+        # One refused attempt, then plain text for the rest of the folders.
+        self.assertEqual([args for _, command, args in server.calls if command == 'search'],
+                         [('CHARSET', 'UTF-8', 'TEXT'), (None, 'TEXT'), (None, 'TEXT')])
+        self.assertTrue(all(server.readonly))
+        self.assertFalse(any(call[1] == 'store' for call in server.calls))
+
+    def test_outlook_keeps_operator_words_literal_and_refuses_accents_in_words(self):
+        server = OutlookSearchServer()
+        self.connector.return_value = (server, server.folders, None)
+        self.assertEqual(self.api.search_messages('one', 'cdclick OR ALL', server_folder='INBOX')['items'], [])
+        with self.assertRaisesRegex(ValueError, "can't search for accented letters"):
+            self.api.search_messages('one', 'café')
+        # Accented text is never sent without its CHARSET; Outlook would match the wrong mail.
+        self.assertEqual([args for _, command, args in server.calls if command == 'search'],
+                         [('CHARSET', 'UTF-8', 'TEXT'), (None, 'TEXT'), ('CHARSET', 'UTF-8', 'TEXT')])
 
     def test_junk_and_trash_can_be_searched_in_their_selected_folder(self):
         for folder in ('Junk','Trash'):
