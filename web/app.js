@@ -599,6 +599,7 @@ async function openMessage(uid, el) {
         const always = document.createElement("button");
         always.id = "always-images";
         always.className = "outline secondary";
+        always.style.marginLeft = "8px";
         always.textContent = "Always for this sender";
         const current = () => view === mailboxView && request === messageReadRequest && state.selectedUid === uid;
         always.onclick = async () => {
