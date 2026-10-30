@@ -74,7 +74,8 @@ private network destinations and recheck redirects. Failed images can be retried
 permission resets when you open another message. Pictures load by themselves from trusted
 senders (rescued, let in, your own addresses) and from people this mailbox has written to,
 except in Junk; **Always for this sender** beside Load images adds the sender to that list,
-which travels with the mailbox to your other PCs. Cloud mailboxes always ask.
+which travels with the mailbox to your other PCs. A cloud mailbox has its own trusted list
+(its own address plus Always for this sender), shared with your other PCs through Valet.
 
 ## How it connects
 
