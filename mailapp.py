@@ -72,7 +72,7 @@ else:
     _WEBVIEW_IMPORT_ERROR = None
 
 APP_NAME = "SimpleMail"
-APP_VERSION = "1.9.21"
+APP_VERSION = "1.9.22"
 APP_REPO = "Extra-Life-Records/SimpleMail"  # owner/repo for auto-updates
 CONFIG_DIR = Path(os.environ.get("APPDATA", str(Path.home()))) / APP_NAME
 CONFIG_FILE = CONFIG_DIR / "config.json"
@@ -1182,6 +1182,38 @@ class Api:
         from mail_images import load_remote_images
         message = self.get_message(account_id, folder, uid, validity)
         return load_remote_images(message.get("html") or "")
+
+    def message_images_trusted(self, account_id, sender, folder_key=""):
+        """Do this message's pictures show without asking: the sender is trusted (rescued, let in, "Always for this
+        sender", the owner's own addresses) or someone this mailbox has written to. Never in Junk, where a sender
+        is easily forged. Cloud mailboxes keep no settings here, so they always ask."""
+        import mail_screen
+        addr = mail_screen.address(sender).lower()
+        cloud = str(account_id).startswith("cloud:")
+        if not addr or cloud or folder_key == "junk":
+            return {"auto": False, "address": addr, "can_trust": bool(addr) and not cloud}
+        acct = self._acct(account_id)
+        if mail_screen.trusted_match(addr, self._trusted(acct)):
+            return {"auto": True, "address": addr, "can_trust": True}
+        try:
+            known = known_senders(acct)
+        except Exception:   # offline: they just ask this time
+            known = set()
+        return {"auto": addr in known, "address": addr, "can_trust": True}
+
+    def trust_sender_images(self, account_id, sender):
+        """"Always for this sender": trust the address, so its pictures show by themselves from now on (and its mail
+        is never screened). It travels to the other PCs with the mailbox."""
+        import mail_screen
+        addr = mail_screen.address(sender).lower()
+        if not addr or str(account_id).startswith("cloud:"):
+            raise ValueError("This sender can't be trusted here")
+        self._log(f"CALL trust_sender_images {account_id}")
+        acct = self._acct(account_id)
+        if addr not in acct.setdefault("trusted", []):
+            acct["trusted"].append(addr)
+            self.cfg.save()
+        return {"address": addr}
 
     def _cloud_accounts(self):
         if not hasattr(self, '_cloud_provider'):

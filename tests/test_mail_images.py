@@ -109,5 +109,66 @@ class ImageTests(unittest.TestCase):
         load.assert_called_once_with("<p>Selected message</p>")
 
 
+
+class Cfg:
+    def __init__(self, accounts):
+        import mailapp
+        self.data = {"accounts": [mailapp.normalize_account(a) for a in accounts], "active_account": ""}
+        self.saves = 0
+
+    def accounts(self):
+        return self.data["accounts"]
+
+    def account(self, account_id):
+        return next(a for a in self.accounts() if a["id"] == account_id)
+
+    def save(self):
+        self.saves += 1
+
+
+LIVE = {"id": "adam", "email": "adam@live.co.uk", "auth": "microsoft", "password": "token",
+        "imap_host": "outlook.office365.com", "smtp_host": "smtp-mail.outlook.com", "trusted": ["distrokid.com"]}
+
+
+class TrustedImageTests(unittest.TestCase):
+    def setUp(self):
+        self.cfg = Cfg([{**LIVE, "trusted": list(LIVE["trusted"])}])
+        self.api = Api(self.cfg)
+        known = patch("mailapp.known_senders", return_value={"sarah@sky.com"})
+        self.known = known.start()
+        self.addCleanup(known.stop)
+
+    def check(self, sender, folder="inbox"):
+        return self.api.message_images_trusted("adam", sender, folder)
+
+    def test_trusted_senders_and_people_written_to_show_pictures(self):
+        self.assertTrue(self.check('"Zayn (DistroKid)" <support@distrokid.com>')["auto"])   # a trusted site
+        self.assertTrue(self.check("Sarah <Sarah@Sky.com>")["auto"])                         # written to
+        self.assertTrue(self.check("Adam <adam@live.co.uk>")["auto"])                        # yourself
+
+    def test_anyone_else_asks_and_can_be_trusted(self):
+        result = self.check("OpenAI <noreply@email.openai.com>")
+        self.assertEqual(result, {"auto": False, "address": "noreply@email.openai.com", "can_trust": True})
+
+    def test_junk_and_cloud_mailboxes_always_ask(self):
+        self.assertFalse(self.check("support@distrokid.com", "junk")["auto"])
+        cloud = self.api.message_images_trusted("cloud:hello", "support@distrokid.com", "inbox")
+        self.assertEqual((cloud["auto"], cloud["can_trust"]), (False, False))
+
+    def test_offline_sent_folder_just_asks(self):
+        self.known.side_effect = OSError("offline")
+        self.assertFalse(self.check("sarah@sky.com")["auto"])
+
+    def test_always_for_this_sender_trusts_the_address_once(self):
+        self.assertEqual(self.api.trust_sender_images("adam", "OpenAI <NoReply@email.openai.com>"),
+                         {"address": "noreply@email.openai.com"})
+        self.api.trust_sender_images("adam", "noreply@email.openai.com")
+        self.assertEqual(self.cfg.accounts()[0]["trusted"], ["distrokid.com", "noreply@email.openai.com"])
+        self.assertEqual(self.cfg.saves, 1)
+        self.assertTrue(self.check("noreply@email.openai.com")["auto"])
+        with self.assertRaises(ValueError):
+            self.api.trust_sender_images("adam", "no address here")
+
+
 if __name__ == "__main__":
     unittest.main()

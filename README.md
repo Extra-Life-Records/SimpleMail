@@ -21,7 +21,8 @@ owner's x64 machine and is published with native x64 and ARM64 downloads.
   (Screener, Rescued, Shop Orders, Updates, Social, Promotions, Sent, Drafts, Archive, Junk, Trash; any other
   server folder is under More folders)
 - ✅ **Mailbox switcher** — a drop-up menu at the bottom of the sidebar
-- ✅ **Real HTML email rendering** (sandboxed; remote images blocked until Load images)
+- ✅ **Real HTML email rendering** (sandboxed; remote images blocked until Load images, except from trusted senders
+  and people you've written to)
 
 - ✅ **Compose with signature** — set it once in Settings, auto-appended
 - ✅ **Signature logos** — embedded images travel with the email, and keep their
@@ -69,7 +70,10 @@ owner's x64 machine and is published with native x64 and ARM64 downloads.
 and displays them inside the sandbox. This also handles senders whose image
 servers forbid direct embedding. Downloads send no cookies or referrer, block
 private network destinations and recheck redirects. Failed images can be retried;
-permission resets when you open another message.
+permission resets when you open another message. Pictures load by themselves from trusted
+senders (rescued, let in, your own addresses) and from people this mailbox has written to,
+except in Junk; **Always for this sender** beside Load images adds the sender to that list,
+which travels with the mailbox to your other PCs. Cloud mailboxes always ask.
 
 ## How it connects
 
