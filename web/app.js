@@ -767,8 +767,12 @@ function showAccountForm(i) {
   $("mail-connection-fields").hidden = cloud;
   $("mail-server-settings").hidden = cloud;
   $("mail-rules-settings").hidden = cloud;
-  $("cloud-mailbox-info").hidden = !cloud;
-  $("cloud-mailbox-info").textContent = cloud ? `Signature for ${a.identity}. This mailbox is managed through your employee sign-in.` : "";
+  const microsoft = a.auth === "microsoft";
+  $("set-password").closest(".field").hidden = microsoft;
+  $("mail-server-settings").hidden = cloud || microsoft;
+  $("cloud-mailbox-info").hidden = !cloud && !microsoft;
+  $("cloud-mailbox-info").textContent = cloud ? `Signature for ${a.identity}. This mailbox is managed through your employee sign-in.`
+    : microsoft ? "Signed in with Microsoft. To reconnect, use + Add Microsoft account and pick this mailbox again." : "";
   $("acct-remove-btn").disabled = cloud;
   $("test-btn").hidden = cloud;
   $("set-label").value = a.label || "";
@@ -802,6 +806,26 @@ function addAccount() {
   editAccounts.push({ ...BLANK_ACCOUNT });
   showAccountForm(editAccounts.length - 1);
   $("set-label").focus();
+}
+
+async function addMicrosoftAccount() {
+  stashAccountForm();
+  $("acct-add-ms-btn").disabled = true;
+  toast("Sign in with Microsoft in your browser, then come back here.");
+  try {
+    const res = await api.add_microsoft_account();
+    // The backend saved it; reload so a later Save can't drop the new mailbox.
+    const cfg = await api.get_config();
+    editAccounts = (cfg.accounts || []).map((a) => ({ ...a }));
+    showAccountForm(Math.max(0, editAccounts.findIndex((a) => a.id === res.account_id)));
+    state.activeAccountId = res.account_id;
+    await reloadAccounts();
+    toast(`${res.email} added`);
+  } catch (e) {
+    toast("Microsoft sign-in failed: " + e, true);
+  } finally {
+    $("acct-add-ms-btn").disabled = false;
+  }
 }
 
 function removeAccount() {
@@ -960,6 +984,7 @@ async function init() {
   });
   $("set-account-picker").addEventListener("change", switchEditedAccount);
   $("acct-add-btn").addEventListener("click", addAccount);
+  $("acct-add-ms-btn").addEventListener("click", addMicrosoftAccount);
   $("acct-remove-btn").addEventListener("click", removeAccount);
   $("delete-btn").addEventListener("click", deleteSelected);
   $("reply-btn").addEventListener("click", () => replyTo(false));

@@ -69,7 +69,7 @@ else:
     _WEBVIEW_IMPORT_ERROR = None
 
 APP_NAME = "SimpleMail"
-APP_VERSION = "1.9.10"
+APP_VERSION = "1.9.12"
 APP_REPO = "Extra-Life-Records/SimpleMail"  # owner/repo for auto-updates
 CONFIG_DIR = Path(os.environ.get("APPDATA", str(Path.home()))) / APP_NAME
 CONFIG_FILE = CONFIG_DIR / "config.json"
@@ -90,6 +90,8 @@ ACCOUNT_DEFAULTS = {
     "label": "",             # human name shown in the sidebar / From display name
     "color": "#2563eb",      # account accent so mailboxes are visually unmistakable
     "email": "",             # IMAP login, and the default identity
+    "auth": "password",      # password | microsoft (OAuth2; "password" then
+                             # holds the Microsoft refresh token)
     "password": "",          # IMAP login password (and SMTP unless overridden)
     "from_email": "",        # identity override (e.g. hello@playloudr.com while
                              # the mailbox itself lives on another domain)
@@ -170,6 +172,10 @@ class Config:
             pass  # migration re-runs next boot; nothing is lost
 
     def save(self):
+        import microsoft_auth
+        for acct in self.accounts():  # keep Microsoft's newest refresh token
+            if acct.get("auth") == "microsoft":
+                acct["password"] = microsoft_auth.latest_refresh_token(acct["email"]) or acct["password"]
         write_config(CONFIG_FILE, self.data)
 
     # -- accounts ----------------------------------------------------------
@@ -211,11 +217,29 @@ def smtp_credentials(acct):
 # Mail plumbing (pure logic - also used by --check)
 # ---------------------------------------------------------------------------
 
+def _microsoft_login(acct):
+    import microsoft_auth
+    token = microsoft_auth.access_token(acct["email"], acct["password"])
+    return microsoft_auth.xoauth2(acct["email"], token)
+
+
+def smtp_login(smtp, acct):
+    if acct.get("auth") == "microsoft":
+        login = _microsoft_login(acct)
+        smtp.auth("XOAUTH2", lambda challenge=None: login)
+        return
+    smtp.login(*smtp_credentials(acct))
+
+
 def connect_imap(cfg):
     """Open an authenticated IMAP connection. Returns (imap, folder_list)."""
     import imaplib
     imap = imaplib.IMAP4_SSL(cfg["imap_host"], int(cfg["imap_port"]), timeout=30)
-    imap.login(cfg["email"], cfg["password"])
+    if cfg.get("auth") == "microsoft":
+        login = _microsoft_login(cfg).encode()
+        imap.authenticate("XOAUTH2", lambda _: login)
+    else:
+        imap.login(cfg["email"], cfg["password"])
     folders = []
     sent_folder = None
     try:
@@ -223,7 +247,8 @@ def connect_imap(cfg):
         if typ == "OK":
             for line in data:
                 text = line.decode("utf-8", "replace")
-                m = re.search(r'"([^"]+)"\s*$', text)
+                # Name is quoted on Fasthosts, bare on Outlook.com (Inbox, Sent, ...)
+                m = re.search(r'"([^"]+)"\s*$', text) or re.search(r'\)\s+(?:"[^"]*"|NIL)\s+([^\s"]+)\s*$', text)
                 if m:
                     name = m.group(1)
                     folders.append(name)
@@ -624,13 +649,12 @@ def send_message(acct, to, subject, body, body_html=None, save_sent=True,
     for attachment in attachments or []:
         maintype, subtype = attachment["content_type"].split("/", 1)
         msg.add_attachment(attachment["data"], maintype=maintype, subtype=subtype, filename=attachment["name"])
-    smtp_user, smtp_password = smtp_credentials(acct)
     with smtplib.SMTP(acct["smtp_host"], int(acct["smtp_port"]), timeout=30) as smtp:
         smtp.ehlo()
         if acct["smtp_starttls"]:
             smtp.starttls()
             smtp.ehlo()
-        smtp.login(smtp_user, smtp_password)
+        smtp_login(smtp, acct)
         refused = smtp.send_message(msg)
     # SMTP strips Bcc on transmission; the Sent copy must also omit it.
     if "Bcc" in msg:
@@ -836,7 +860,7 @@ def check_connection(acct):
             if acct["smtp_starttls"]:
                 s.starttls()
                 s.ehlo()
-            s.login(smtp_user, smtp_password)
+            smtp_login(s, acct)
             results.append((True, f"SMTP login OK ({acct['smtp_host']}:{acct['smtp_port']}) as {smtp_user}"))
     except Exception as e:
         results.append((False, f"SMTP failed: {e}"))
@@ -1153,6 +1177,7 @@ class Api:
                 "label": acct["label"],
                 "color": acct.get("color") or "#2563eb",
                 "email": acct["email"],
+                "auth": acct.get("auth", "password"),
                 "password": "",
                 "has_password": bool(acct["password"] or "password" in acct.get("_locked_credentials", {})),
                 "credential_error": bool(acct.get("_locked_credentials")),
@@ -1275,6 +1300,35 @@ class Api:
         results = check_connection(acct)
         ok = all(r[0] for r in results)
         return {"ok": ok, "error": None if ok else "; ".join(l for okk, l in results if not okk)}
+
+    def add_microsoft_account(self):
+        """Browser sign-in, then add (or reconnect) that Outlook.com / Microsoft mailbox."""
+        self._log("CALL add_microsoft_account")
+        import microsoft_auth
+        signed_in = microsoft_auth.sign_in()
+        email = signed_in["email"]
+        accounts = [dict(a) for a in self.cfg.accounts()]
+        acct = next((a for a in accounts if a["email"].lower() == email.lower()), None)
+        if acct is None:
+            ids = {a["id"] for a in accounts}
+            acct = normalize_account({"id": _slugify(email.split("@")[0]), "label": email,
+                                      "email": email, "color": "#0a64d6"})
+            while acct["id"] in ids:
+                acct["id"] += "-2"
+            accounts.append(acct)
+        acct.update({"auth": "microsoft", "password": signed_in["refresh_token"], "smtp_user": "",
+                     "smtp_password": "", "imap_host": microsoft_auth.IMAP_HOST,
+                     "imap_port": microsoft_auth.IMAP_PORT, "smtp_host": microsoft_auth.SMTP_HOST,
+                     "smtp_port": microsoft_auth.SMTP_PORT, "smtp_starttls": True})
+        acct.pop("_locked_credentials", None)
+        previous = self.cfg.data
+        self.cfg.data = {**previous, "accounts": accounts, "active_account": acct["id"]}
+        try:
+            self.cfg.save()
+        except Exception:
+            self.cfg.data = previous
+            raise
+        return {"ok": True, "account_id": acct["id"], "email": email}
 
     def _retain_credentials(self, acct, raw):
         for field in ("password", "smtp_password"):
