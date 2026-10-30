@@ -42,6 +42,11 @@ owner's x64 machine and is published with native x64 and ARM64 downloads.
 - ✅ Click links in HTML and plain-text emails to open them in your browser
 - ✅ Mail refreshes every 30 seconds and when returning to the app, preserving
   the open email, search and message-list scroll position
+- ✅ **Rescue real mail from Junk** — open Junk (or Trash) and press the life-ring
+  button. SimpleMail ticks mail from people you've emailed or senders you trust,
+  lists replies and personal addresses as "maybe", and moves your pick to a
+  **Rescued** folder (Undo in Activity). Their senders are trusted from then on.
+  Judged by the sender's address, never the display name.
 - ✅ **Outlook.com / Hotmail / Live mailboxes** — Settings → + Add Microsoft account signs in
   with Microsoft (Microsoft no longer accepts passwords for these mailboxes)
 - ✅ Credentials protected with Windows DPAPI; settings stored locally in `%APPDATA%\SimpleMail`

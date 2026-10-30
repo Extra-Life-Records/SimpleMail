@@ -70,7 +70,7 @@ else:
     _WEBVIEW_IMPORT_ERROR = None
 
 APP_NAME = "SimpleMail"
-APP_VERSION = "1.9.13"
+APP_VERSION = "1.9.14"
 APP_REPO = "Extra-Life-Records/SimpleMail"  # owner/repo for auto-updates
 CONFIG_DIR = Path(os.environ.get("APPDATA", str(Path.home()))) / APP_NAME
 CONFIG_FILE = CONFIG_DIR / "config.json"
@@ -105,6 +105,7 @@ ACCOUNT_DEFAULTS = {
     "smtp_password": "",     # SMTP password override (e.g. a Resend API key)
     "signature": "",
     "rules": {},             # learned sender-domain -> folder moves, per account
+    "trusted": [],           # senders (addresses or domains) rescued mail comes from
 }
 
 # Legacy (v1.0.x) single-account keys, migrated into accounts[0] on first load.
@@ -121,6 +122,7 @@ def normalize_account(raw):
     """Fill an account dict with defaults; never mutates the input."""
     acct = dict(ACCOUNT_DEFAULTS)
     acct["rules"] = {}
+    acct["trusted"] = []
     for key in ACCOUNT_DEFAULTS:
         if key in (raw or {}):
             acct[key] = raw[key]
@@ -287,7 +289,7 @@ def map_folders(server_folders):
         "sent": ["sent messages", "sent", "sent items"],
         "drafts": ["drafts"],
         "junk": ["junk", "junk email", "spam"],
-        "trash": ["trash", "deleted items", "deleted messages"],
+        "trash": ["trash", "deleted items", "deleted messages", "deleted"],
     }.items():
         for c in candidates:
             if c in lower:
@@ -1243,6 +1245,7 @@ class Api:
         # Preserve learned rules across saves: the settings UI doesn't edit
         # them, so merge each account's stored rules back in by id.
         existing_rules = {a["id"]: a.get("rules", {}) for a in self.cfg.accounts()}
+        existing_trusted = {a["id"]: a.get("trusted", []) for a in self.cfg.accounts()}
         accounts = []
         seen_ids = set()
         cloud_ids = set()
@@ -1266,6 +1269,8 @@ class Api:
             acct = self._retain_credentials(acct, raw)
             if "rules" not in raw or not raw.get("rules"):
                 acct["rules"] = existing_rules.get(acct["id"], {})
+            if not raw.get("trusted"):
+                acct["trusted"] = existing_trusted.get(acct["id"], [])
             accounts.append(acct)
         active = data.get("active_account", "")
         if active not in cloud_ids and not any(a["id"] == active for a in accounts):
@@ -1764,6 +1769,48 @@ class Api:
         create_folder(self._acct(account_id), name)
         return {"ok": True}
 
+    def _trusted(self, acct):
+        """The account's trusted senders plus the owner's own addresses and
+        business domains (a personal domain like live.co.uk is too broad)."""
+        import mail_screen
+        trusted = list(acct.get("trusted", []))
+        for other in self.cfg.accounts():
+            for addr in (other.get("email", ""), other.get("from_email", "")):
+                addr = addr.strip().lower()
+                if "@" in addr:
+                    host = mail_screen.domain(addr)
+                    trusted.append(addr if host in mail_screen.PERSONAL_DOMAINS else host)
+        return trusted
+
+    def find_real_mail(self, account_id, server_folder):
+        """Scan a folder (usually Junk) for mail from real people."""
+        import mail_screen
+        self._log(f"CALL find_real_mail {account_id} {server_folder}")
+        acct = self._acct(account_id)
+        imap, folders, sent_flag = connect_imap(acct)
+        try:
+            known = mail_screen.known_senders(imap, pick_sent_folder(folders, sent_flag) if folders else None)
+            own = {a.strip().lower() for a in (acct["email"], acct.get("from_email", "")) if a.strip()}
+            validity, items = mail_screen.scan(imap, server_folder, known - own,
+                                               [t for t in self._trusted(acct) if t not in own], own=own)
+        finally:
+            imap.logout()
+        return {"validity": validity, "items": items, "target": mail_screen.RESCUE_FOLDER}
+
+    def rescue_mail(self, account_id, server_folder, uids, validity, trust=()):
+        """Move the chosen messages to Rescued and trust their senders."""
+        import mail_screen
+        self._log(f"CALL rescue_mail {account_id} {server_folder} {len(uids)}")
+        acct = self._acct(account_id)
+        result = mail_screen.rescue(acct, self._filing_store(), connect_imap, server_folder, uids, validity)
+        new = [a.strip().lower() for a in trust if "@" in str(a)]
+        new = [a for a in dict.fromkeys(new) if a not in acct.setdefault("trusted", [])]
+        if new and result["moved"]:
+            acct["trusted"].extend(new)
+            self.cfg.save()
+        result["trusted"] = new if result["moved"] else []
+        return result
+
     def remove_rule(self, account_id, domain):
         self._log(f"CALL remove_rule {account_id} {domain}")
         removed = remove_rule(self.cfg, account_id, domain)
@@ -2019,7 +2066,7 @@ def main():
         # re-register on the bottle instance (module-level decorators attach to default app)
         server.route("/", "GET", _index)
         server.route("/<filename:path>", "GET", _static)
-        port = 17591
+        port = int(os.environ.get("SIMPLEMAIL_PORT", "17591"))  # override to run a dev copy alongside
         threading.Thread(
             target=lambda: server.run(host="127.0.0.1", port=port, quiet=True),
             daemon=True,
