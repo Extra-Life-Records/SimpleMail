@@ -125,7 +125,8 @@ Conversation reading links exact Message-ID/References tokens across folders,
 including Junk/Trash, and labels shortened bodies. Missing/malformed threading
 headers can prevent linking; identical subjects alone are never sufficient.
 
-The human reader has a collapsed Conversation history section with continuation
+The human reader has a collapsed Conversation history section (on replies only: a message
+with In-Reply-To or References headers) with continuation
 and retry controls. It works independently of agent enablement. The desktop's
 ordinary search input still filters the loaded folder; integrating the complete
 search tools into that input remains pending. Priority 3 is partly implemented;

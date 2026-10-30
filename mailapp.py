@@ -72,7 +72,7 @@ else:
     _WEBVIEW_IMPORT_ERROR = None
 
 APP_NAME = "SimpleMail"
-APP_VERSION = "1.9.20"
+APP_VERSION = "1.9.21"
 APP_REPO = "Extra-Life-Records/SimpleMail"  # owner/repo for auto-updates
 CONFIG_DIR = Path(os.environ.get("APPDATA", str(Path.home()))) / APP_NAME
 CONFIG_FILE = CONFIG_DIR / "config.json"
@@ -563,6 +563,8 @@ def fetch_message(imap, folder, uid, expected_validity=None):
         "text": text,
         "html": html,
         "attachments": attachments,
+        # a reply (it names earlier messages): the reader offers its Conversation history
+        "threaded": bool(msg.get("In-Reply-To") or msg.get("References")),
     }
 
 
