@@ -33,6 +33,7 @@ from mail_credentials import unlock_account, write_config
 from mail_inline_images import set_message_body
 from window_state import load_placement, remember_window
 from cloud_accounts import CloudAccounts, route_cloud
+import account_sync
 from cloud_mail import (CloudSignInRequired, CloudAccessDenied, CloudConfigurationError,
                         CloudServiceError, CloudRequestError)
 
@@ -71,7 +72,7 @@ else:
     _WEBVIEW_IMPORT_ERROR = None
 
 APP_NAME = "SimpleMail"
-APP_VERSION = "1.9.16"
+APP_VERSION = "1.9.17"
 APP_REPO = "Extra-Life-Records/SimpleMail"  # owner/repo for auto-updates
 CONFIG_DIR = Path(os.environ.get("APPDATA", str(Path.home()))) / APP_NAME
 CONFIG_FILE = CONFIG_DIR / "config.json"
@@ -1252,7 +1253,10 @@ class Api:
         cloud_configured = self._cloud_accounts().transport.cloud_config()['configured']
         if cloud_configured:
             try:
-                accounts.extend(self._cloud_accounts().discover())
+                found = self._cloud_accounts().discover()
+                gone = self._retire_fasthosts(found)
+                accounts = [a for a in accounts if a["id"] not in gone]
+                accounts.extend(found)
             except (CloudSignInRequired, CloudAccessDenied, CloudConfigurationError,
                     CloudServiceError, CloudRequestError) as exc:
                 cloud_error = str(exc)
@@ -1267,6 +1271,21 @@ class Api:
             "version": APP_VERSION,
             "arch": current_arch(),
         }
+
+    def _retire_fasthosts(self, cloud_accounts):
+        """Fasthosts was cancelled (Oct 2026) and its mailboxes are cloud mailboxes now: a Fasthosts entry whose
+        address the cloud serves is a dead copy, so it goes. Returns the ids removed."""
+        served = {(a.get("email") or "").lower() for a in cloud_accounts}
+        gone = {a["id"] for a in self.cfg.accounts()
+                if account_sync.on_fasthosts(a) and {(a.get("email") or "").lower(), (a.get("from_email") or "").lower()} & served}
+        if gone:
+            keep = [a for a in self.cfg.accounts() if a["id"] not in gone]
+            active = self.cfg.data.get("active_account", "")
+            self.cfg.data = {**self.cfg.data, "accounts": keep,
+                             "active_account": active if active not in gone else
+                             (keep[0]["id"] if keep else next((a["id"] for a in cloud_accounts), ""))}
+            self.cfg.save()
+        return gone
 
     @route_cloud
     def get_folders(self, account_id):
@@ -1350,7 +1369,14 @@ class Api:
         except Exception:
             self.cfg.data = previous
             raise
+        self._share_soon()
         return {"ok": True, "accounts": [a["id"] for a in accounts], "active_account": active}
+
+    def _share_soon(self):
+        """Settings changed: tell the other PCs now rather than in two minutes."""
+        syncer = getattr(self, "syncer", None)
+        if syncer:
+            syncer.wake.set()
 
     def test_connection(self, data):
         self._log("CALL test_connection")
@@ -1386,6 +1412,7 @@ class Api:
         except Exception:
             self.cfg.data = previous
             raise
+        self._share_soon()
         return {"ok": True, "account_id": acct["id"], "email": email}
 
     def _retain_credentials(self, acct, raw):
@@ -2096,6 +2123,32 @@ def show_toast(title, body):
         pass
 
 
+class AccountSyncer(threading.Thread):
+    """Shares the mailboxes with the owner's other PCs through Valet (account_sync.py): at start, every two
+    minutes, and soon after Settings change. Mailboxes that arrive while the window is open show up at once."""
+
+    def __init__(self, cfg):
+        super().__init__(daemon=True)
+        self.cfg = cfg
+        self.wake = threading.Event()
+        self.first = threading.Event()   # the first round has finished (or given up)
+        self.store = account_sync.ValetStore()
+        self.record = account_sync.Record(CONFIG_DIR / "account-sync.json")
+
+    def run(self):
+        while True:
+            try:
+                if account_sync.sync(self.cfg, self.store, self.record, normalize_account) and _API_WINDOW:
+                    _API_WINDOW.evaluate_js("typeof reloadAccounts === 'function' && reloadAccounts()")
+            except account_sync.ValetUnavailable:
+                pass  # Valet locked or not installed: next round
+            except Exception:
+                pass  # never take the app down over sharing; next round
+            self.first.set()
+            self.wake.wait(120)
+            self.wake.clear()
+
+
 class MailPoller(threading.Thread):
     """Poll the inbox for new mail and raise native toasts.
 
@@ -2272,7 +2325,13 @@ def main():
     else:
         url = str(index_html)
 
+    # Mailboxes added on the owner's other PCs come in first, so they get a poller too (a few seconds at most).
+    syncer = AccountSyncer(cfg)
+    syncer.start()
+    syncer.first.wait(8)
+
     api = Api(cfg)
+    api.syncer = syncer
     icon_path = _BASE_DIR / "assets" / "icon.ico"
     placement_file = CONFIG_DIR / "window.json"
     placement = load_placement(placement_file)
