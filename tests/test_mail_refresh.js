@@ -417,3 +417,97 @@ test('email links allow web and email addresses while blocking local and active 
     assert.equal(a.run('safeEmailLink(link)'), null);
   }
 });
+
+const tick = () => new Promise(resolve => setImmediate(resolve));
+
+test('going back to a folder shows its last list at once, then the refresh replaces it', async () => {
+  const a = app();
+  a.run("state.folders.push({key:'sent',server:'Sent',name:'Sent'})");
+  a.api.list_messages = async (_, server) => response([mail(server + '-1')]);
+  await a.run("selectFolder('inbox')");
+  await a.run("selectFolder('sent')");
+  const pending = deferred();
+  a.api.list_messages = () => pending.promise;
+  const back = a.run("selectFolder('inbox')");
+  assert.equal(a.run("$('msg-list').innerHTML"), 'Message INBOX-1');
+  pending.resolve(response([mail('INBOX-2'), mail('INBOX-1')]));
+  await back;
+  assert.equal(a.run("$('msg-list').innerHTML"), 'Message INBOX-2,Message INBOX-1');
+});
+
+test('sidebar folders are read one at a time, Sent first, without touching the open list', async () => {
+  const a = app();
+  a.run(`state.folders.push({key:'trash',server:'Trash',name:'Trash'}, {key:'sent',server:'Sent',name:'Sent'},
+    {key:'custom',server:'Custom',name:'Custom'}); state.messages=[{uid:'open'}]`);
+  const calls = []; let inFlight = 0, most = 0;
+  a.api.list_messages = async (_, server) => {
+    calls.push(server); most = Math.max(most, ++inFlight);
+    await tick(); inFlight--;
+    return response([mail(server)]);
+  };
+  await a.run("prefetchFolders('a')");
+  assert.deepEqual(calls, ['Sent', 'Trash']);  // not Inbox (open), not "More folders"
+  assert.equal(most, 1);
+  assert.equal(a.run('state.messages[0].uid'), 'open');
+  a.api.list_messages = () => new Promise(() => {});
+  a.run("selectFolder('sent')");
+  assert.equal(a.run("$('msg-list').innerHTML"), 'Message Sent');
+});
+
+test('opening a folder while its background read is running shares that read', async () => {
+  const a = app();
+  a.run("state.folders.push({key:'sent',server:'Sent',name:'Sent'})");
+  const pending = deferred(); let calls = 0;
+  a.api.list_messages = () => { calls++; return pending.promise; };
+  const prefetch = a.run("prefetchFolders('a')");
+  const open = a.run("selectFolder('sent')");
+  pending.resolve(response([mail('sent')]));
+  await Promise.all([prefetch, open]);
+  assert.equal(calls, 1);
+  assert.equal(a.run('state.messages[0].uid'), 'sent');
+});
+
+test('a background read for the previous mailbox never fills the new one', async () => {
+  const a = app();
+  a.run("state.folders.push({key:'sent',server:'Sent',name:'Sent'})");
+  const pending = deferred();
+  a.api.list_messages = () => pending.promise;
+  const prefetch = a.run("prefetchFolders('a')");
+  a.api.get_folders = async () => ({folders: [{key:'inbox',server:'INBOX',name:'Inbox'}, {key:'sent',server:'Sent',name:'Sent'}]});
+  a.api.list_messages = async (_, server) => response([mail('b-' + server)]);
+  await a.run("selectAccount('b')");
+  pending.resolve(response([mail('a-secret')]));
+  await prefetch;
+  await a.run("selectFolder('sent')");
+  assert.equal(a.run('state.messages[0].uid'), 'b-Sent');
+  assert.equal(a.run(`folderCache.has(cacheKey('b','sent')) && folderCache.get(cacheKey('b','sent')).messages[0].uid`), 'b-Sent');
+  assert.equal(a.run(`folderCache.get(cacheKey('a','sent'))`), undefined);
+});
+
+test('a message removed from a folder stays gone when going back to it', async () => {
+  const a = app();
+  a.run("state.folders.push({key:'sent',server:'Sent',name:'Sent'})");
+  a.api.list_messages = async (_, server) => response(server === 'INBOX' ? [mail('keep'), mail('gone')] : [mail('s')]);
+  await a.run("selectFolder('inbox')");
+  a.run("state.messages = state.messages.filter(m => m.uid !== 'gone')");
+  await a.run("selectFolder('sent')");
+  a.api.list_messages = () => new Promise(() => {});
+  a.run("selectFolder('inbox')");
+  assert.equal(a.run("$('msg-list').innerHTML"), 'Message keep');
+});
+
+test('a cached folder refresh that loses to opening a message is read again', async () => {
+  const a = app();
+  a.run("state.folders.push({key:'sent',server:'Sent',name:'Sent'})");
+  a.api.list_messages = async (_, server) => response([mail(server + '-old')]);
+  await a.run("selectFolder('inbox')");
+  await a.run("selectFolder('sent')");
+  const stale = deferred();
+  a.api.list_messages = () => stale.promise;
+  const back = a.run("selectFolder('inbox')");
+  await a.run("mailAction(async () => {})");  // e.g. reading a message
+  a.api.list_messages = async () => response([mail('INBOX-new')]);
+  stale.resolve(response([mail('INBOX-stale')]));
+  await back; await tick();
+  assert.equal(a.run('state.messages[0].uid'), 'INBOX-new');
+});
