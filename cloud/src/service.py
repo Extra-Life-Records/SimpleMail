@@ -397,7 +397,8 @@ def dispatch(table, s3, ses, subject, method, path, data, query):
             try:
                 item = authorize(table, name, subject)
                 items.append({'name': name, 'address': mailbox_address(name), 'state': item['state'],
-                              'folders': mailbox_folders(item)})
+                              'folders': mailbox_folders(item), 'generation': item['generation'],
+                              'external_sent_copy': name == 'mail-playloudr' and os.environ.get('HUMAN_SENDING_ENABLED') == 'true'})
             except Denied: pass
         return {'mailboxes': items}
     parts = path.strip('/').split('/')
