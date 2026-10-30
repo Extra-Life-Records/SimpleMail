@@ -21,6 +21,7 @@ import smtplib
 import subprocess
 import sys
 import threading
+import time
 from email import message_from_bytes
 from email.message import EmailMessage
 from email.policy import default as email_policy
@@ -70,7 +71,7 @@ else:
     _WEBVIEW_IMPORT_ERROR = None
 
 APP_NAME = "SimpleMail"
-APP_VERSION = "1.9.15"
+APP_VERSION = "1.9.16"
 APP_REPO = "Extra-Life-Records/SimpleMail"  # owner/repo for auto-updates
 CONFIG_DIR = Path(os.environ.get("APPDATA", str(Path.home()))) / APP_NAME
 CONFIG_FILE = CONFIG_DIR / "config.json"
@@ -106,6 +107,8 @@ ACCOUNT_DEFAULTS = {
     "signature": "",
     "rules": {},             # learned sender-domain -> folder moves, per account
     "trusted": [],           # senders (addresses or domains) rescued mail comes from
+    "screen_from": 0,        # screening: Inbox mail above this UID from unknown senders
+                             # moves to Screener (0 = off)
 }
 
 # Legacy (v1.0.x) single-account keys, migrated into accounts[0] on first load.
@@ -836,6 +839,62 @@ def apply_rules(cfg, account_id, server_folder, envelopes, validity=None):
     return kept, moved
 
 
+_KNOWN = {}
+_KNOWN_LOCK = threading.Lock()
+KNOWN_TTL = 1800
+
+
+def known_senders(acct, refresh=False):
+    """Everyone this mailbox has written to (from Sent), cached for 30 minutes."""
+    import mail_screen
+    with _KNOWN_LOCK:
+        cached = _KNOWN.get(acct["id"])
+        if cached and not refresh and time.time() - cached[0] < KNOWN_TTL:
+            return cached[1]
+    imap, folders, sent_flag = connect_imap(acct)
+    try:
+        known = mail_screen.known_senders(imap, pick_sent_folder(folders, sent_flag) if folders else None)
+    finally:
+        imap.logout()
+    with _KNOWN_LOCK:
+        _KNOWN[acct["id"]] = (time.time(), known)
+    return known
+
+
+def screening_trust(cfg, acct):
+    """Trusted entries for screening: the account's trusted senders plus the
+    owner's own addresses (mail from yourself always stays in the Inbox)."""
+    trusted = list(acct.get("trusted", []))
+    for other in cfg.accounts():
+        for addr in (other.get("email", ""), other.get("from_email", "")):
+            if "@" in addr:
+                trusted.append(addr.strip().lower())
+    return trusted
+
+
+def apply_screening(cfg, acct, server_folder, envelopes, validity):
+    """Move new Inbox mail from unknown senders to Screener. Returns
+    (kept_envelopes, moved_count)."""
+    import mail_screen
+    from mail_filing import FilingStore, move_many
+    since = int(acct.get("screen_from") or 0)
+    if not since or server_folder.upper() != "INBOX" or not validity:
+        return envelopes, 0
+    candidates = mail_screen.to_screen(envelopes, since, known_senders(acct), screening_trust(cfg, acct))
+    if not candidates:
+        return envelopes, 0
+    imap, folders, _ = connect_imap(acct)
+    try:
+        target = mail_screen.ensure_folder(imap, folders, mail_screen.SCREEN_FOLDER)
+    finally:
+        imap.logout()
+    result = move_many(acct, FilingStore(CONFIG_DIR / 'agent' / 'mailbox.sqlite3'), server_folder,
+                       [e["uid"] for e in candidates], target, connect_imap, validity,
+                       actor="screener", reason="Screened: a sender you haven't let in yet")
+    moved = set(result["moved_uids"])
+    return [e for e in envelopes if e["uid"] not in moved], len(moved)
+
+
 def check_connection(acct):
     """Returns list of (ok: bool, line: str)."""
     results = []
@@ -1246,6 +1305,7 @@ class Api:
         # them, so merge each account's stored rules back in by id.
         existing_rules = {a["id"]: a.get("rules", {}) for a in self.cfg.accounts()}
         existing_trusted = {a["id"]: a.get("trusted", []) for a in self.cfg.accounts()}
+        existing_screen = {a["id"]: a.get("screen_from", 0) for a in self.cfg.accounts()}
         accounts = []
         seen_ids = set()
         cloud_ids = set()
@@ -1271,6 +1331,8 @@ class Api:
                 acct["rules"] = existing_rules.get(acct["id"], {})
             if not raw.get("trusted"):
                 acct["trusted"] = existing_trusted.get(acct["id"], [])
+            if "screen_from" not in raw:
+                acct["screen_from"] = existing_screen.get(acct["id"], 0)
             accounts.append(acct)
         active = data.get("active_account", "")
         if active not in cloud_ids and not any(a["id"] == active for a in accounts):
@@ -1365,6 +1427,11 @@ class Api:
         finally:
             imap.logout()
         envelopes, moved = apply_rules(self.cfg, account_id, server_folder, envelopes, validity)
+        if not moved:
+            try:
+                envelopes, moved = apply_screening(self.cfg, acct, server_folder, envelopes, validity)
+            except Exception as exc:
+                self._log(f"screening skipped: {exc}")
         if moved:
             # re-open a fresh connection; apply_rules used its own
             imap2, _, _ = connect_imap(acct)
@@ -1850,6 +1917,9 @@ class Api:
                 "total": job["total"] if job else (saved or {}).get("total", 0),
                 "error": job["error"] if job else None,
                 "scanned_at": (saved or {}).get("scanned_at"),
+                "screening": bool(acct.get("screen_from")),
+                "is_inbox": server_folder.upper() == "INBOX",
+                "is_screener": server_folder.lower() == "screener",
                 "groups": index.groups(account_id, server_folder, self._trusted(acct))}
 
     def clear_sender(self, account_id, server_folder, site_name, block=False):
@@ -1877,6 +1947,45 @@ class Api:
             learn_rule(self.cfg, account_id, site_name, trash)
         return {"moved": result["moved"], "uncertain": result["uncertain"], "missing": result["missing"],
                 "target": trash, "blocked": site_name if block else None}
+
+    def set_screening(self, account_id, on):
+        """Turn screening on (from the newest Inbox mail onwards) or off."""
+        self._log(f"CALL set_screening {account_id} {on}")
+        acct = self._acct(account_id)
+        since = 0
+        if on:
+            imap, _, _ = connect_imap(acct)
+            try:
+                imap.select("INBOX", readonly=True)
+                typ, data = imap.uid("SEARCH", None, "ALL")
+                since = max((int(u) for u in (data[0] or b"").split()), default=0) if typ == "OK" and data else 0
+            finally:
+                imap.logout()
+            since = max(since, 1)
+            known_senders(acct, refresh=True)
+        acct["screen_from"] = since
+        self.cfg.save()
+        return {"screening": bool(since)}
+
+    def allow_sender(self, account_id, server_folder, site_name):
+        """Let a sender in: trust its site and move its mail to the Inbox."""
+        from mail_filing import move_many
+        self._log(f"CALL allow_sender {account_id} {server_folder} {site_name}")
+        acct = self._acct(account_id)
+        index = self._sender_index()
+        saved = index.state(account_id, server_folder)
+        if not saved:
+            raise ValueError("Scan this folder first")
+        if site_name not in acct.setdefault("trusted", []):
+            acct["trusted"].append(site_name)
+            self.cfg.save()
+        imap, folders, _ = connect_imap(acct)
+        imap.logout()
+        inbox = next((f["server"] for f in map_folders(folders) if f["key"] == "inbox"), "INBOX")
+        result = move_many(acct, self._filing_store(), server_folder, index.uids(account_id, server_folder, site_name),
+                           inbox, connect_imap, saved["validity"], reason=f"Let in: {site_name}")
+        index.remove(account_id, server_folder, result["moved_uids"])
+        return {"moved": result["moved"], "uncertain": result["uncertain"], "target": inbox}
 
     def unsubscribe_sender(self, account_id, server_folder, site_name):
         import mail_senders
@@ -2020,6 +2129,15 @@ class MailPoller(threading.Thread):
             except Exception:
                 pass  # transient IMAP/network errors are fine
 
+    def _screened(self, sender, uid):
+        import mail_screen
+        try:
+            return bool(mail_screen.to_screen([{"uid": str(uid), "sender": sender}],
+                                              int(self.acct.get("screen_from") or 0), known_senders(self.acct),
+                                              self.acct.get("trusted", []) + [self.acct["email"].lower()]))
+        except Exception:
+            return False
+
     def _snapshot_uid(self):
         try:
             imap, _, _ = connect_imap(self.acct)
@@ -2068,6 +2186,8 @@ class MailPoller(threading.Thread):
                 rule_target = self.acct.get("rules", {}).get(domain)
                 if rule_target and rule_target != "INBOX":
                     continue  # learned rule routes this elsewhere
+                if self.acct.get("screen_from") and self._screened(sender, uid):
+                    continue  # goes to Screener, not worth a notification
                 label = self.acct.get("label") or self.acct.get("email") or ""
                 show_toast(f"[{label}] {subject}" if label else subject, short_sender(sender))
             if seen_uids:
