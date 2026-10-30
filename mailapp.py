@@ -72,7 +72,7 @@ else:
     _WEBVIEW_IMPORT_ERROR = None
 
 APP_NAME = "SimpleMail"
-APP_VERSION = "1.9.17"
+APP_VERSION = "1.9.18"
 APP_REPO = "Extra-Life-Records/SimpleMail"  # owner/repo for auto-updates
 CONFIG_DIR = Path(os.environ.get("APPDATA", str(Path.home()))) / APP_NAME
 CONFIG_FILE = CONFIG_DIR / "config.json"
@@ -1190,6 +1190,7 @@ class Api:
 
     def connect_cloud_accounts(self):
         self._cloud_accounts().transport.cloud_login()
+        self._share_soon()
         return self._cloud_accounts().discover()
 
     def open_cloud_owner_settings(self):
@@ -2134,11 +2135,12 @@ class AccountSyncer(threading.Thread):
         self.first = threading.Event()   # the first round has finished (or given up)
         self.store = account_sync.ValetStore()
         self.record = account_sync.Record(CONFIG_DIR / "account-sync.json")
+        self.cloud = account_sync.CloudSignIn(CONFIG_DIR)   # the cloud mailboxes' sign-in travels too
 
     def run(self):
         while True:
             try:
-                if account_sync.sync(self.cfg, self.store, self.record, normalize_account) and _API_WINDOW:
+                if account_sync.sync(self.cfg, self.store, self.record, normalize_account, cloud=self.cloud) and _API_WINDOW:
                     _API_WINDOW.evaluate_js("typeof reloadAccounts === 'function' && reloadAccounts()")
             except account_sync.ValetUnavailable:
                 pass  # Valet locked or not installed: next round
