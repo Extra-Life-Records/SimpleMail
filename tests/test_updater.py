@@ -29,7 +29,7 @@ Covers the paths that bit real releases:
   T5  check_update error surfacing (arch-named error, exceptions surfaced)
   T6  live GitHub check: latest release must exist and carry an asset for
       THIS machine's arch (regression: v1.1.0 shipped x64-only)
-  T7  web/app.js startup update-check ordering + checkForUpdates behaviour
+  T7  web/app.js startup starts the update watch (autoupdate.js) + checkForUpdates behaviour
       (node vm harness; skipped if node is unavailable)
   T8  inbox snippet decoding: single-part bodies must shed their declared
       Content-Transfer-Encoding (regression: quoted-printable receipts
@@ -480,6 +480,7 @@ const mkStubs = () => ({
   selectAccount: async () => calls.push(['selectAccount']),
   state: {},
   checkForUpdates: async () => calls.push(['checkForUpdates']),
+  startAutoUpdate: () => calls.push(['startAutoUpdate']),
   escapeHtml: s => String(s),
   document: { getElementById: () => ({ innerHTML: '' }) },
   $: id => ({ textContent: '', innerHTML: '', style: {},
@@ -495,7 +496,7 @@ const t = (name, cond, detail = '') => {
   let ctx = vm.createContext(Object.assign({ api: { get_config: async () => ({ accounts: [] }) } }, mkStubs()));
   vm.runInContext('(async () => { ' + initSrc + ' })()', ctx);
   await new Promise(r => setImmediate(r));
-  const iCheck = calls.findIndex(c => c[0] === 'checkForUpdates');
+  const iCheck = calls.findIndex(c => c[0] === 'startAutoUpdate');
   const iOpen = calls.findIndex(c => c[0] === 'openSettings');
   t('T7: logged-out app still checks for updates first', iCheck >= 0 && iCheck < iOpen, JSON.stringify(calls));
   calls.length = 0;
@@ -504,7 +505,7 @@ const t = (name, cond, detail = '') => {
   vm.runInContext('(async () => { ' + initSrc + ' })()', ctx);
   await new Promise(r => setImmediate(r));
   t('T7: logged-in app checks exactly once',
-    calls.filter(c => c[0] === 'checkForUpdates').length === 1, JSON.stringify(calls));
+    calls.filter(c => c[0] === 'startAutoUpdate').length === 1, JSON.stringify(calls));
 
   // checkForUpdates behaviour (available / error / silent / up-to-date)
   ctx = vm.createContext(Object.assign({ api: { check_update: async () => ({
