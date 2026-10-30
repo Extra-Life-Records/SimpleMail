@@ -5,6 +5,7 @@ import uuid
 from email import message_from_bytes
 from email.policy import default
 from email.utils import getaddresses
+from imap_fetch import fetch_groups
 import re
 
 from agent_store import AgentStore, now
@@ -259,13 +260,10 @@ def sync_inbox(mailbox, queue, include_existing=False):
             account = mailbox._account()
             own = {address.lower() for _, address in getaddresses([account.get("email", ""),
                                                                    account.get("from_email", "")])}
-            for part in fetched or []:
-                if not isinstance(part, tuple):
+            for uid, _, parts in fetch_groups(fetched):
+                if uid not in page or not parts:
                     continue
-                match = re.search(rb'UID (\d+)', part[0])
-                if not match or int(match[1]) not in page:
-                    continue
-                msg = message_from_bytes(part[1], policy=default)
+                msg = message_from_bytes(parts[0][1], policy=default)
                 senders = {address.lower() for _, address in getaddresses([str(msg.get("From", ""))])}
                 # Untrusted headers can restrict processing, never authorize more actions.
                 automatic = str(msg.get("Auto-Submitted", "no")).lower() != "no"
@@ -273,7 +271,7 @@ def sync_inbox(mailbox, queue, include_existing=False):
                 status = "handled" if senders & own else "needs_owner" if automatic or bulk else "pending"
                 note = "Self-originated mail; no automatic reply" if senders & own else (
                     "Automatic or mailing-list message; owner review required" if automatic or bulk else "")
-                items.append({"message_ref": mailbox.ref("INBOX", validity, match[1].decode()),
+                items.append({"message_ref": mailbox.ref("INBOX", validity, str(uid)),
                               "headers": mailbox.headers(msg), "status": status, "note": note})
             if len(items) != len(page) or len({item["message_ref"] for item in items}) != len(page):
                 raise ValueError("Inbox changed or headers are incomplete; retry sync")

@@ -7,6 +7,7 @@ from contextlib import contextmanager
 from email import message_from_bytes
 from email.policy import default as email_policy
 from email.utils import getaddresses
+from imap_fetch import fetch_groups
 
 MAX_MESSAGE_BYTES = 10 * 1024 * 1024
 MAX_ATTACHMENT_BYTES = 2 * 1024 * 1024
@@ -204,16 +205,10 @@ class MailboxAgent:
                     "(UID BODY.PEEK[HEADER.FIELDS (FROM TO CC REPLY-TO SUBJECT DATE MESSAGE-ID REFERENCES IN-REPLY-TO)])")
                 if typ != "OK":
                     raise ValueError("Could not fetch search results")
-                for part in fetched or []:
-                    if not isinstance(part, tuple):
+                for uid, _, parts in fetch_groups(fetched):
+                    if uid not in page or not parts:
                         continue
-                    match = re.search(rb'UID (\d+)', part[0])
-                    if not match:
-                        continue
-                    uid = int(match[1])
-                    if uid not in page:
-                        continue
-                    msg = message_from_bytes(part[1], policy=email_policy)
+                    msg = message_from_bytes(parts[0][1], policy=email_policy)
                     items.append({"message_ref": self.ref(folder, validity, uid), "uid": str(uid),
                                   **self.headers(msg), "seen": None})
                 if len(items) != len(page):
@@ -222,13 +217,9 @@ class MailboxAgent:
                 typ, flags = imap.uid("fetch", ",".join(map(str, page)), "(UID FLAGS)")
                 flags_by_uid = {}
                 if typ == "OK":
-                    for entry in flags or []:
-                        line = entry[0] if isinstance(entry, tuple) else entry
-                        if not isinstance(line, bytes):
-                            continue
-                        found = re.search(rb'UID (\d+) FLAGS \(([^)]*)\)', line)
-                        if found:
-                            flags_by_uid[found[1].decode()] = b'\\Seen' in found[2]
+                    for uid, found, _ in fetch_groups(flags):
+                        if uid is not None and found is not None:
+                            flags_by_uid[str(uid)] = '\\Seen' in found
                 for item in items:
                     item["seen"] = flags_by_uid.get(item["uid"])
                 items.sort(key=lambda item: int(item["uid"]), reverse=True)

@@ -27,6 +27,7 @@ from email.policy import default as email_policy
 from pathlib import Path
 import html as html_lib
 from html.parser import HTMLParser
+from imap_fetch import fetch_groups
 from mail_credentials import unlock_account, write_config
 from mail_inline_images import set_message_body
 from window_state import load_placement, remember_window
@@ -69,7 +70,7 @@ else:
     _WEBVIEW_IMPORT_ERROR = None
 
 APP_NAME = "SimpleMail"
-APP_VERSION = "1.9.12"
+APP_VERSION = "1.9.13"
 APP_REPO = "Extra-Life-Records/SimpleMail"  # owner/repo for auto-updates
 CONFIG_DIR = Path(os.environ.get("APPDATA", str(Path.home()))) / APP_NAME
 CONFIG_FILE = CONFIG_DIR / "config.json"
@@ -331,11 +332,9 @@ def fetch_envelopes(imap, folder, limit):
     flags_map = {}
     try:
         typ, fdata = imap.uid("fetch", uidlist, "(UID FLAGS)")
-        for item in fdata:
-            line = item if isinstance(item, bytes) else item[0]
-            m = re.search(rb"UID (\d+) FLAGS \(([^)]*)\)", line)
-            if m:
-                flags_map[m.group(1).decode()] = m.group(2).decode("utf-8", "replace")
+        for uid, flags, _ in fetch_groups(fdata):
+            if uid is not None and flags is not None:
+                flags_map[str(uid)] = flags
     except Exception:
         pass
 
@@ -351,32 +350,24 @@ def fetch_envelopes(imap, folder, limit):
             " CONTENT-TYPE CONTENT-TRANSFER-ENCODING)]"
             " BODY.PEEK[TEXT]<0.2000>)",
         )
-        cur = None  # current envelope being assembled
-        cur_cte = cur_ctype = ""
-        for item in fdata:
-            if not isinstance(item, tuple):
+        for uid, _, parts in fetch_groups(fdata):
+            header = next((p for d, p in parts if "BODY[HEADER.FIELDS" in d), None)
+            if uid is None or header is None:
                 continue
-            desc = item[0].decode("utf-8", "replace")
-            payload = item[1]
-            if "BODY[HEADER.FIELDS" in desc:
-                m = re.search(r"UID (\d+)", desc)
-                if not m:
-                    continue
-                msg = message_from_bytes(payload, policy=email_policy)
-                cur_cte = str(msg.get("Content-Transfer-Encoding", ""))
-                cur_ctype = str(msg.get("Content-Type", ""))
-                cur = {
-                    "uid": m.group(1),
-                    "sender": str(msg.get("From", "")),
-                    "subject": str(msg.get("Subject", "(no subject)")),
-                    "date": str(msg.get("Date", "")),
-                    "seen": r"\Seen" in flags_map.get(m.group(1), ""),
-                    "snippet": "",
-                }
-                envelopes.append(cur)
-            elif "BODY[TEXT]" in desc and cur is not None:
-                snippet = decode_snippet(payload, cur_cte, cur_ctype)
-                cur["snippet"] = snippet[:180]
+            msg = message_from_bytes(header, policy=email_policy)
+            cur = {
+                "uid": str(uid),
+                "sender": str(msg.get("From", "")),
+                "subject": str(msg.get("Subject", "(no subject)")),
+                "date": str(msg.get("Date", "")),
+                "seen": r"\Seen" in flags_map.get(str(uid), ""),
+                "snippet": "",
+            }
+            text = next((p for d, p in parts if "BODY[TEXT]" in d), None)
+            if text is not None:
+                cur["snippet"] = decode_snippet(text, str(msg.get("Content-Transfer-Encoding", "")),
+                                                str(msg.get("Content-Type", "")))[:180]
+            envelopes.append(cur)
     except Exception:
         pass
     envelopes.reverse()
@@ -1939,15 +1930,10 @@ class MailPoller(threading.Thread):
             if typ != "OK" or not fdata:
                 return
             seen_uids = set()
-            for item in fdata:
-                if not isinstance(item, tuple):
+            for uid, _, parts in fetch_groups(fdata):
+                if uid is None or not parts:
                     continue
-                desc = item[0].decode("utf-8", "replace")
-                payload = item[1]
-                m = re.search(r"UID (\d+)", desc)
-                if not m:
-                    continue
-                uid = int(m.group(1))
+                payload = parts[0][1]
                 seen_uids.add(uid)
                 if uid <= self._last_uid:
                     continue
