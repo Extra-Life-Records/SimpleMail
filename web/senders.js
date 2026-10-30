@@ -57,6 +57,7 @@ function renderSenders() {
       b.onclick = () => fn(b);
       actions.appendChild(b);
     };
+    if (view.isScreener) add("Let in", "", (b) => allowSender(g, b));
     if (g.can_unsubscribe) add("Unsubscribe", "outline", (b) => unsubscribeSender(g, b));
     add("Move to Trash", "outline secondary", (b) => clearSender(g, false, b));
     if (!g.trusted) add("Block", "secondary", (b) => clearSender(g, true, b));
@@ -70,7 +71,9 @@ async function pollSenders() {
   try {
     const res = await api.sender_scan_status(view.accountId, view.server);
     if (view !== sendersView) return;
-    view.groups = res.groups; view.state = res.state;
+    view.groups = res.groups; view.state = res.state; view.isScreener = !!res.is_screener;
+    $("screening-row").style.display = res.is_inbox ? "" : "none";
+    $("screening-toggle").checked = !!res.screening;
     $("senders-progress").textContent = sendersProgress(res);
     renderSenders();
     if (res.state === "running") view.timer = setTimeout(pollSenders, 2500);
@@ -86,6 +89,7 @@ async function openSenders() {
   sendersView = { accountId: state.activeAccountId, server: folder.server, groups: [], state: "running" };
   $("senders-title").textContent = `Who sends your ${folder.name}`;
   $("senders-filter").value = "";
+  $("screening-row").style.display = "none";
   $("senders-progress").textContent = "Starting…";
   $("senders-list").innerHTML = '<div class="empty">Reading senders…</div>';
   $("senders-backdrop").classList.add("show");
@@ -119,6 +123,39 @@ async function clearSender(g, block, button) {
   }
 }
 
+async function allowSender(g, button) {
+  const view = sendersView;
+  button.disabled = true; button.textContent = "Letting in…";
+  try {
+    const res = await mailAction(() => api.allow_sender(view.accountId, view.server, g.site));
+    toast(`Let in ${g.site}: moved ${res.moved.toLocaleString()} to ${res.target}. Its new mail stays in the Inbox.`, !!res.uncertain);
+    if (view === sendersView) {
+      view.groups = view.groups.filter((x) => x.site !== g.site);
+      renderSenders();
+    }
+    if (state.activeAccountId === view.accountId) loadMessages({ quiet: true });
+  } catch (e) {
+    toast("Could not let in: " + e, true);
+    button.disabled = false; button.textContent = "Let in";
+  }
+}
+
+async function setScreening(on) {
+  const view = sendersView;
+  const toggle = $("screening-toggle");
+  toggle.disabled = true;
+  try {
+    const res = await api.set_screening(view.accountId, on);
+    toggle.checked = res.screening;
+    toast(res.screening ? "Screening on: new mail from unknown senders goes to Screener" : "Screening off");
+  } catch (e) {
+    toggle.checked = !on;
+    toast("Could not change screening: " + e, true);
+  } finally {
+    toggle.disabled = false;
+  }
+}
+
 async function unsubscribeSender(g, button) {
   const view = sendersView;
   if (!confirm(`Unsubscribe from ${g.site}?\n\nSimpleMail tells the sender you want no more emails (one-click unsubscribe).`)) return;
@@ -134,6 +171,7 @@ async function unsubscribeSender(g, button) {
 }
 
 $("senders-btn").addEventListener("click", openSenders);
+$("screening-toggle").addEventListener("change", (e) => setScreening(e.target.checked));
 $("senders-filter").addEventListener("input", () => sendersView && renderSenders());
 $("senders-close").addEventListener("click", () => {
   clearTimeout(sendersView?.timer);

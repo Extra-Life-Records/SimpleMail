@@ -320,6 +320,8 @@
   #senders-modal { width: 820px; }
   #senders-tools { display: flex; gap: 10px; align-items: center; margin: 4px 0 8px; }
   #senders-tools input { margin: 0; flex: 1; }
+  #screening-row { font-size: 0.85rem; font-weight: 400 !important; margin: 0 0 8px; display: flex; gap: 8px; align-items: center; }
+  #screening-row input { margin: 0; }
   #senders-progress { font-size: 0.85rem; color: var(--pico-muted-color); }
   #senders-list { overflow-y: auto; max-height: 56vh; }
   .sender-row { display: flex; gap: 12px; align-items: center; padding: 8px 4px;
@@ -702,6 +704,11 @@
         <input type="search" id="senders-filter" placeholder="Filter senders…" aria-label="Filter senders">
         <span id="senders-progress" role="status"></span>
       </div>
+      <label id="screening-row" style="display:none">
+        <input type="checkbox" id="screening-toggle" role="switch">
+        <span>Screen new mail: senders you haven't written to or let in go to a <b>Screener</b> folder
+        (while SimpleMail is open)</span>
+      </label>
       <div id="senders-list"></div>
       <p style="margin:8px 0 0;font-size:0.78rem;color:var(--pico-muted-color)">
         Trash moves are listed in Activity with Undo. Block also moves this sender's new Inbox mail to Trash

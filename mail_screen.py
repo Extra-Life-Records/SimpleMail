@@ -223,3 +223,21 @@ def rescue(account, store, connector, folder, uids, validity, target=RESCUE_FOLD
         except Exception:
             pass
     return {"target": target, "moved": moved, "failed": failed}
+
+
+SCREEN_FOLDER = "Screener"
+
+
+def to_screen(envelopes, since_uid, known, trusted):
+    """Inbox envelopes that screening moves aside: arrived after screening
+    was turned on (uid > since_uid) and from nobody the owner has written to
+    or trusted. `trusted` should include the owner's own addresses."""
+    out = []
+    for envelope in envelopes:
+        if not str(envelope.get("uid", "")).isdigit() or int(envelope["uid"]) <= since_uid:
+            continue
+        addr = address(envelope.get("sender", "")).lower()
+        if addr and (addr in known or trusted_match(addr, trusted)):
+            continue
+        out.append(envelope)
+    return out
