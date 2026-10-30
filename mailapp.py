@@ -844,24 +844,49 @@ def apply_rules(cfg, account_id, server_folder, envelopes, validity=None):
 
 _KNOWN = {}
 _KNOWN_LOCK = threading.Lock()
+_KNOWN_FETCHING = {}   # account id -> lock held while its Sent folder is read (about 10 s on a big mailbox)
 KNOWN_TTL = 1800
 
 
-def known_senders(acct, refresh=False):
-    """Everyone this mailbox has written to (from Sent), cached for 30 minutes."""
-    import mail_screen
+def _known_cached(acct):
     with _KNOWN_LOCK:
         cached = _KNOWN.get(acct["id"])
-        if cached and not refresh and time.time() - cached[0] < KNOWN_TTL:
-            return cached[1]
-    imap, folders, sent_flag = connect_imap(acct)
-    try:
-        known = mail_screen.known_senders(imap, pick_sent_folder(folders, sent_flag) if folders else None)
-    finally:
-        imap.logout()
+        return cached[1] if cached and time.time() - cached[0] < KNOWN_TTL else None
+
+
+def known_senders(acct, refresh=False):
+    """Everyone this mailbox has written to (from Sent), cached for 30 minutes. One read at a time per mailbox:
+    a caller that arrives while it's being read waits for that read instead of starting its own."""
+    import mail_screen
+    if not refresh and (known := _known_cached(acct)) is not None:
+        return known
     with _KNOWN_LOCK:
-        _KNOWN[acct["id"]] = (time.time(), known)
-    return known
+        fetching = _KNOWN_FETCHING.setdefault(acct["id"], threading.Lock())
+    with fetching:
+        if not refresh and (known := _known_cached(acct)) is not None:
+            return known
+        imap, folders, sent_flag = connect_imap(acct)
+        try:
+            known = mail_screen.known_senders(imap, pick_sent_folder(folders, sent_flag) if folders else None)
+        finally:
+            imap.logout()
+        with _KNOWN_LOCK:
+            _KNOWN[acct["id"]] = (time.time(), known)
+        return known
+
+
+def warm_known_senders(acct):
+    """Start reading who the mailbox has written to in the background, so the first emails opened can already show
+    their pictures (message_images_trusted)."""
+    if _known_cached(acct) is None:
+        threading.Thread(target=lambda: _quietly(known_senders, acct), daemon=True).start()
+
+
+def _quietly(fn, *args):
+    try:
+        fn(*args)
+    except Exception:
+        pass
 
 
 def screening_trust(cfg, acct):
@@ -1330,6 +1355,7 @@ class Api:
         folders = []
         error = None
         if acct["email"] and acct["password"]:
+            warm_known_senders(acct)
             try:
                 imap, server_folders, _ = connect_imap(acct)
                 try:

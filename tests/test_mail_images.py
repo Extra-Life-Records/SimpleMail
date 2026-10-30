@@ -170,5 +170,30 @@ class TrustedImageTests(unittest.TestCase):
             self.api.trust_sender_images("adam", "no address here")
 
 
+
+class KnownSendersTests(unittest.TestCase):
+    def test_lookups_at_the_same_time_read_sent_once(self):
+        import threading, time, mailapp
+        mailapp._KNOWN.pop("solo", None)
+        reads = []
+
+        def slow(imap, folder):
+            reads.append(folder)
+            time.sleep(0.2)
+            return {"sarah@sky.com"}
+        imap = Mock()
+        with patch("mailapp.connect_imap", return_value=(imap, ["Sent"], None)),              patch("mailapp.pick_sent_folder", return_value="Sent"), patch("mail_screen.known_senders", side_effect=slow):
+            results = []
+            threads = [threading.Thread(target=lambda: results.append(mailapp.known_senders({"id": "solo"})))
+                       for _ in range(3)]
+            for t in threads:
+                t.start()
+            for t in threads:
+                t.join()
+        self.assertEqual(reads, ["Sent"])
+        self.assertEqual(results, [{"sarah@sky.com"}] * 3)
+        mailapp._KNOWN.pop("solo", None)
+
+
 if __name__ == "__main__":
     unittest.main()
