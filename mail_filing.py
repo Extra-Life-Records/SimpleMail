@@ -106,6 +106,39 @@ class FilingStore(AgentStore):
             self._event(db, account, 'filing_' + status, {'action_id': identifier})
         return self.get(account, identifier)
 
+    def begin_many(self, account, folder, validity, uids, target, actor, reason, rule_domain='', batch=None):
+        """Record many pending moves in one transaction. Returns {uid: action id}.
+        Request keys carry the batch id so a whole batch can be found again."""
+        stamp, actions, batch = now(), {}, batch or str(uuid.uuid4())
+        with self.connect() as db:
+            db.execute('BEGIN IMMEDIATE')
+            for uid in uids:
+                source = {'folder': folder, 'validity': validity, 'uid': uid}
+                identifier = str(uuid.uuid4())
+                key = f'{actor}-bulk-{batch}-{uid}'
+                db.execute('INSERT INTO filing_actions VALUES(?,?,?,?,?,NULL,?,?,?,?,?,?)',
+                           (identifier, account, key, json.dumps(source), target, 'moving', actor, reason, rule_domain, stamp, stamp))
+                actions[uid] = identifier
+            self._event(db, account, 'filing_started', {'count': len(actions), 'target': target,
+                                                         'note': f'{reason}: {len(actions)} messages to {target}'})
+        return actions
+
+    def finish_many(self, account, actions, destinations):
+        """Mark each action moved (with its destination) or uncertain."""
+        stamp = now()
+        with self.connect() as db:
+            db.execute('BEGIN IMMEDIATE')
+            for uid, identifier in actions.items():
+                destination = destinations.get(uid)
+                db.execute("UPDATE filing_actions SET status=?,destination=?,updated_at=? "
+                           "WHERE account_id=? AND id=? AND status='moving'",
+                           ('moved' if destination else 'uncertain',
+                            json.dumps(destination) if destination else None, stamp, account, identifier))
+            uncertain = len(actions) - len(destinations)
+            self._event(db, account, 'filing_moved', {'count': len(destinations), 'uncertain': uncertain,
+                                                       'note': f'{len(destinations)} messages filed' +
+                                                               (f', {uncertain} need checking' if uncertain else '')})
+
     def claim_undo(self, account, identifier):
         with self.connect() as db:
             changed = db.execute("UPDATE filing_actions SET status='undoing',updated_at=? WHERE account_id=? AND id=? AND status='moved'",
@@ -201,3 +234,83 @@ def undo(account, store, identifier, connector):
             imap.logout()
         except Exception:
             pass
+
+
+def uid_set(value):
+    """'1:3,7' -> ['1', '2', '3', '7'] (ranges ascending, as RFC 4315 pairs them)."""
+    out = []
+    for part in value.split(','):
+        low, _, high = part.partition(':')
+        low, high = int(low), int(high or low)
+        out.extend(str(n) for n in range(min(low, high), max(low, high) + 1))
+    return out
+
+
+def copyuid_pairs(imap, data, target_validity):
+    """{source uid: destination uid} from every COPYUID the last MOVE returned."""
+    _, responses = imap.response('COPYUID')
+    values = [value for value in responses or [] if isinstance(value, bytes)]
+    values += [match.group(1) for value in data or [] if isinstance(value, bytes)
+               for match in re.finditer(rb'\[COPYUID ([^\]]+)\]', value)]
+    pairs = {}
+    for value in values:
+        match = re.fullmatch(rb'\s*(\d+) ([\d:,]+) ([\d:,]+)\s*', value)
+        if not match or match[1].decode() != target_validity:
+            continue
+        sources, targets = uid_set(match[2].decode()), uid_set(match[3].decode())
+        if len(sources) == len(targets):
+            pairs.update(zip(sources, targets))
+    return pairs
+
+
+def move_many(account, store, folder, uids, target, connector, expected_validity,
+              actor='owner', reason='Filed by owner', rule_domain='', chunk=250, batch=None):
+    """Move many messages with one login and one MOVE per chunk, recording
+    each message as its own filing action so Undo still works per message.
+    Returns {'moved': n, 'uncertain': n, 'missing': n, 'moved_uids': [...]}."""
+    uids = sorted({str(uid) for uid in uids if str(uid).isdigit() and int(uid) > 0}, key=int)
+    quote(folder); quote(target)
+    if folder == target:
+        raise ValueError('Messages are already in that folder')
+    if not expected_validity:
+        raise ValueError('Refresh the folder before filing')
+    counts = {'moved': 0, 'uncertain': 0, 'missing': 0, 'moved_uids': []}
+    batch_id = batch or str(uuid.uuid4())
+    if not uids:
+        return counts
+    imap, _, _ = connector(account)
+    try:
+        capabilities = {value.decode().upper() if isinstance(value, bytes) else str(value).upper() for value in imap.capabilities}
+        if not {'MOVE', 'UIDPLUS'} <= capabilities:
+            raise ValueError('This server does not support recoverable filing; no message was moved')
+        target_validity = select(imap, target)
+        if select(imap, folder, False) != expected_validity:
+            raise ValueError('Folder identity changed; scan again before filing')
+        for start in range(0, len(uids), chunk):
+            group = uids[start:start + chunk]
+            result, data = imap.uid('SEARCH', None, 'UID ' + ','.join(group))
+            present = set(data[0].decode().split()) if result == 'OK' and data and data[0] else set()
+            group = [uid for uid in group if uid in present]
+            counts['missing'] += len(uids[start:start + chunk]) - len(group)
+            if not group:
+                continue
+            actions = store.begin_many(account['id'], folder, expected_validity, group, target, actor, reason,
+                                       rule_domain, batch_id)
+            imap.response('COPYUID')  # discard any earlier response
+            try:
+                result, data = imap.uid('MOVE', ','.join(group), quote(target))
+                pairs = copyuid_pairs(imap, data, target_validity) if result == 'OK' else {}
+            except Exception:
+                pairs = {}
+            done = {uid: {'folder': target, 'validity': target_validity, 'uid': pairs[uid]}
+                    for uid in group if uid in pairs}
+            store.finish_many(account['id'], actions, done)
+            counts['moved'] += len(done)
+            counts['moved_uids'] += list(done)
+            counts['uncertain'] += len(group) - len(done)
+    finally:
+        try:
+            imap.logout()
+        except Exception:
+            pass
+    return counts

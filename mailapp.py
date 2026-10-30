@@ -70,7 +70,7 @@ else:
     _WEBVIEW_IMPORT_ERROR = None
 
 APP_NAME = "SimpleMail"
-APP_VERSION = "1.9.14"
+APP_VERSION = "1.9.15"
 APP_REPO = "Extra-Life-Records/SimpleMail"  # owner/repo for auto-updates
 CONFIG_DIR = Path(os.environ.get("APPDATA", str(Path.home()))) / APP_NAME
 CONFIG_FILE = CONFIG_DIR / "config.json"
@@ -779,14 +779,14 @@ def short_sender(sender):
 
 
 def sender_domain(sender):
-    """'Instagram <posts-recaps@mail.instagram.com>' -> 'instagram.com'."""
+    """'Instagram <posts-recaps@mail.instagram.com>' -> 'instagram.com'
+    (and 'deals@em.argos.co.uk' -> 'argos.co.uk', never just 'co.uk')."""
+    from mail_senders import site
     m = re.search(r"<([^>]+)>", sender)
     addr = m.group(1) if m else sender
     if "@" not in addr:
         return None
-    host = addr.rsplit("@", 1)[1].lower()
-    parts = host.split(".")
-    return ".".join(parts[-2:]) if len(parts) >= 2 else host
+    return site(addr)
 
 
 def learn_rule(cfg, account_id, domain, target_folder):
@@ -1810,6 +1810,83 @@ class Api:
             self.cfg.save()
         result["trusted"] = new if result["moved"] else []
         return result
+
+    # -- sender clean-up --------------------------------------------------
+    def _sender_index(self):
+        from mail_senders import SenderIndex
+        return SenderIndex(CONFIG_DIR / 'agent' / 'senders.sqlite3')
+
+    def start_sender_scan(self, account_id, server_folder):
+        """Start (or join) a background scan of who sent the mail in a folder."""
+        import mail_senders
+        self._log(f"CALL start_sender_scan {account_id} {server_folder}")
+        acct = self._acct(account_id)
+        key = (account_id, server_folder)
+        jobs = self.__dict__.setdefault("_sender_jobs", {})
+        job = jobs.get(key)
+        if job and job["state"] == "running":
+            return self.sender_scan_status(account_id, server_folder)
+        job = jobs[key] = {"state": "running", "done": 0, "total": 0, "error": None}
+
+        def progress(done, total):
+            job["done"], job["total"] = done, total
+
+        def run():
+            try:
+                mail_senders.scan(acct, self._sender_index(), connect_imap, server_folder, progress)
+                job["state"] = "done"
+            except Exception as exc:
+                job["state"], job["error"] = "error", str(exc)
+        threading.Thread(target=run, daemon=True).start()
+        return self.sender_scan_status(account_id, server_folder)
+
+    def sender_scan_status(self, account_id, server_folder):
+        acct = self._acct(account_id)
+        job = self.__dict__.get("_sender_jobs", {}).get((account_id, server_folder))
+        index = self._sender_index()
+        saved = index.state(account_id, server_folder)
+        return {"state": job["state"] if job else ("done" if saved else "none"),
+                "done": job["done"] if job else (saved or {}).get("total", 0),
+                "total": job["total"] if job else (saved or {}).get("total", 0),
+                "error": job["error"] if job else None,
+                "scanned_at": (saved or {}).get("scanned_at"),
+                "groups": index.groups(account_id, server_folder, self._trusted(acct))}
+
+    def clear_sender(self, account_id, server_folder, site_name, block=False):
+        """Move every message from one site to Trash; optionally block it."""
+        from mail_filing import move_many
+        self._log(f"CALL clear_sender {account_id} {server_folder} {site_name} block={block}")
+        acct = self._acct(account_id)
+        index = self._sender_index()
+        saved = index.state(account_id, server_folder)
+        if not saved:
+            raise ValueError("Scan this folder first")
+        imap, folders, _ = connect_imap(acct)
+        imap.logout()
+        trash = next((f["server"] for f in map_folders(folders) if f["key"] == "trash"), None)
+        if not trash:
+            raise ValueError("No Trash folder is available")
+        if trash == server_folder:
+            raise ValueError("These messages are already in Trash")
+        uids = index.uids(account_id, server_folder, site_name)
+        result = move_many(acct, self._filing_store(), server_folder, uids, trash, connect_imap,
+                           saved["validity"], reason=f"Cleared mail from {site_name}",
+                           rule_domain=site_name if block else "")
+        index.remove(account_id, server_folder, result["moved_uids"])
+        if block:
+            learn_rule(self.cfg, account_id, site_name, trash)
+        return {"moved": result["moved"], "uncertain": result["uncertain"], "missing": result["missing"],
+                "target": trash, "blocked": site_name if block else None}
+
+    def unsubscribe_sender(self, account_id, server_folder, site_name):
+        import mail_senders
+        self._log(f"CALL unsubscribe_sender {account_id} {server_folder} {site_name}")
+        self._acct(account_id)
+        url = self._sender_index().unsubscribe_url(account_id, server_folder, site_name)
+        if not url:
+            raise ValueError("This sender has no one-click unsubscribe")
+        mail_senders.unsubscribe(url)
+        return {"ok": True}
 
     def remove_rule(self, account_id, domain):
         self._log(f"CALL remove_rule {account_id} {domain}")
