@@ -614,7 +614,8 @@ async function openMessage(uid, el) {
             toast("Could not trust this sender: " + e, true);
           }
         };
-        Promise.resolve().then(() => api.message_images_trusted(accountId, msg.sender, state.currentFolder)).then(result => {
+        Promise.resolve().then(() => api.message_images_trusted(accountId, msg.sender,
+          state.folders.find(f => f.server === folder.server)?.key || state.currentFolder)).then(result => {
           if (!current() || !images.isConnected) return;
           if (result.auto) images.onclick();
           else if (result.can_trust) {
