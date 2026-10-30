@@ -145,9 +145,12 @@ def known_senders(imap, sent_folder, limit=3000):
     return known
 
 
-def scan(imap, folder, known, trusted, limit=SCAN_LIMIT):
+def scan(imap, folder, known, trusted, limit=SCAN_LIMIT, own=()):
     """Real and maybe-real messages among the newest `limit` in folder.
+    Mail claiming to be from the mailbox itself (`own`) is never rescued:
+    "we hacked your account" spam forges exactly that.
     Returns (validity, items), newest first."""
+    own = {a.lower() for a in own}
     from mail_filing import select
     validity = select(imap, folder)
     typ, data = imap.uid("SEARCH", None, "ALL")
@@ -155,6 +158,8 @@ def scan(imap, folder, known, trusted, limit=SCAN_LIMIT):
     items = []
     for uid, msg in _headers(imap, uids, "FROM SUBJECT DATE IN-REPLY-TO LIST-UNSUBSCRIBE"):
         addr = address(msg.get("From"))
+        if addr.lower() in own:
+            continue
         subject = text(msg.get("Subject")) or "(no subject)"
         verdict, reason = classify(addr, subject, text(msg.get("In-Reply-To")),
                                    text(msg.get("List-Unsubscribe")), known, trusted)

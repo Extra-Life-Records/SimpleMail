@@ -129,6 +129,13 @@ class RescueTests(unittest.TestCase):
         _, items = mail_screen.scan(self.server, "Junk", known, [])
         self.assertEqual([(i["uid"], i["verdict"]) for i in items], [("13", "maybe"), ("11", "real")])
 
+    def test_mail_forged_from_the_mailbox_itself_is_never_rescued(self):
+        self.server.headers[("Junk", "12")] = b"From: Me <Denby@Live.co.uk>\r\nSubject: Re: hacked\r\nIn-Reply-To: <a@b>\r\n\r\n"
+        _, items = mail_screen.scan(self.server, "Junk", {"denby@live.co.uk", "sarahawarner@sky.com"},
+                                    ["denby@live.co.uk"], own=["denby@live.co.uk"])
+        self.assertNotIn("12", [i["uid"] for i in items])
+        self.assertIn("11", [i["uid"] for i in items])
+
     def test_rescue_creates_folder_moves_with_undo_and_logs_in_once(self):
         result = mail_screen.rescue(self.account, self.store, self.connector, "Junk", ["11", "13"], "9")
         self.assertEqual(result, {"target": "Rescued", "moved": ["11", "13"], "failed": []})

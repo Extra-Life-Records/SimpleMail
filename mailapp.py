@@ -1790,7 +1790,9 @@ class Api:
         imap, folders, sent_flag = connect_imap(acct)
         try:
             known = mail_screen.known_senders(imap, pick_sent_folder(folders, sent_flag) if folders else None)
-            validity, items = mail_screen.scan(imap, server_folder, known, self._trusted(acct))
+            own = {a.strip().lower() for a in (acct["email"], acct.get("from_email", "")) if a.strip()}
+            validity, items = mail_screen.scan(imap, server_folder, known - own,
+                                               [t for t in self._trusted(acct) if t not in own], own=own)
         finally:
             imap.logout()
         return {"validity": validity, "items": items, "target": mail_screen.RESCUE_FOLDER}
