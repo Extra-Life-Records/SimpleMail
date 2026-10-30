@@ -1019,7 +1019,7 @@ async function init() {
 
   try {
     const data = await api.get_config();
-    checkForUpdates(true);  // silent check on startup - even when logged out
+    startAutoUpdate();  // autoupdate.js: installs new releases by itself once nothing is being written
     showCloudStatus(data.cloud_error);
     if (!data.accounts || !data.accounts.length) {
       toast("Add your first mail account to get started");

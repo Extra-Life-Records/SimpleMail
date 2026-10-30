@@ -146,10 +146,13 @@ SimpleMail distributes itself through **GitHub releases**:
 - Each release carries desktop and console agent executables for x64 and ARM64:
   `SimpleMail-x64.exe`, `SimpleMail-arm64.exe`, `SimpleMailAgent-x64.exe`, and
   `SimpleMailAgent-arm64.exe`. GitHub Actions builds each on its native architecture.
-- On launch, the app silently checks the latest release; if a newer version
-  exists it offers **Update now / Later**. Update downloads the right .exe for
-  the machine's architecture, swaps it in, and relaunches — no installer, no
-  manual steps.
+- The app checks the latest release on launch and every three hours. When a newer
+  version exists it installs it by itself as soon as nothing is being written: no
+  compose window or other dialog open, no text in the focused box, and no typing or
+  clicking for two minutes (`web/autoupdate.js`). It downloads the right .exe for
+  the machine's architecture, swaps it in, and relaunches within seconds: no
+  installer, no clicks. **Check for updates** in Settings still shows the notes
+  and offers **Update now / Later**.
 
 ### Releasing a new version (the workflow)
 
@@ -170,7 +173,8 @@ publication or installation. Replacement mailbox sending remains disabled.
    the executable headers and runs an isolated console-agent smoke check before
    publishing a release with all four downloads.
 4. Verify the published downloads and the installed app before claiming delivery.
-   Machines running an older SimpleMail version see the update on next launch.
+   Machines running 1.9.20 or later install it by themselves within a few hours;
+   older versions offer it on their next launch.
 
 Requirements for the x64 GitHub build (runs on `windows-latest`):
 Python 3.12, pyinstaller, pywebview 5.3.2, pythonnet 3.0.5, bottle, pillow,
