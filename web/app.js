@@ -584,7 +584,7 @@ async function openMessage(uid, el) {
           if (result.failed) {
             images.textContent = "Retry images";
             toast("Some images could not be loaded. You can try again.", true);
-          } else images.remove();
+          } else { images.remove(); document.getElementById("always-images")?.remove(); }
         } catch (e) {
           if (view !== mailboxView || request !== messageReadRequest || state.selectedUid !== uid) return;
           images.textContent = "Retry images";
@@ -593,7 +593,37 @@ async function openMessage(uid, el) {
           images.disabled = false;
         }
       };
-      if (imageInfo.hasRemoteImages) $("read-body").appendChild(images);
+      if (imageInfo.hasRemoteImages) {
+        $("read-body").appendChild(images);
+        // Trusted senders and people you've written to: pictures show by themselves; anyone else can be trusted here.
+        const always = document.createElement("button");
+        always.id = "always-images";
+        always.className = "outline secondary";
+        always.textContent = "Always for this sender";
+        const current = () => view === mailboxView && request === messageReadRequest && state.selectedUid === uid;
+        always.onclick = async () => {
+          if (!current()) return;
+          always.disabled = true;
+          try {
+            const result = await api.trust_sender_images(accountId, msg.sender);
+            always.remove();
+            toast("Pictures from " + result.address + " will show by themselves");
+            if (current() && images.isConnected) images.onclick();
+          } catch (e) {
+            always.disabled = false;
+            toast("Could not trust this sender: " + e, true);
+          }
+        };
+        Promise.resolve().then(() => api.message_images_trusted(accountId, msg.sender,
+          state.folders.find(f => f.server === folder.server)?.key || state.currentFolder)).then(result => {
+          if (!current() || !images.isConnected) return;
+          if (result.auto) images.onclick();
+          else if (result.can_trust) {
+            always.title = "Show pictures from " + result.address + " without asking";
+            images.after(always);
+          }
+        }).catch(() => {});
+      }
       $("read-body").appendChild(iframe);
     } else {
       const pre = document.createElement("pre");

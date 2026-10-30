@@ -72,7 +72,7 @@ else:
     _WEBVIEW_IMPORT_ERROR = None
 
 APP_NAME = "SimpleMail"
-APP_VERSION = "1.9.21"
+APP_VERSION = "1.9.22"
 APP_REPO = "Extra-Life-Records/SimpleMail"  # owner/repo for auto-updates
 CONFIG_DIR = Path(os.environ.get("APPDATA", str(Path.home()))) / APP_NAME
 CONFIG_FILE = CONFIG_DIR / "config.json"
@@ -844,24 +844,49 @@ def apply_rules(cfg, account_id, server_folder, envelopes, validity=None):
 
 _KNOWN = {}
 _KNOWN_LOCK = threading.Lock()
+_KNOWN_FETCHING = {}   # account id -> lock held while its Sent folder is read (about 10 s on a big mailbox)
 KNOWN_TTL = 1800
 
 
-def known_senders(acct, refresh=False):
-    """Everyone this mailbox has written to (from Sent), cached for 30 minutes."""
-    import mail_screen
+def _known_cached(acct):
     with _KNOWN_LOCK:
         cached = _KNOWN.get(acct["id"])
-        if cached and not refresh and time.time() - cached[0] < KNOWN_TTL:
-            return cached[1]
-    imap, folders, sent_flag = connect_imap(acct)
-    try:
-        known = mail_screen.known_senders(imap, pick_sent_folder(folders, sent_flag) if folders else None)
-    finally:
-        imap.logout()
+        return cached[1] if cached and time.time() - cached[0] < KNOWN_TTL else None
+
+
+def known_senders(acct, refresh=False):
+    """Everyone this mailbox has written to (from Sent), cached for 30 minutes. One read at a time per mailbox:
+    a caller that arrives while it's being read waits for that read instead of starting its own."""
+    import mail_screen
+    if not refresh and (known := _known_cached(acct)) is not None:
+        return known
     with _KNOWN_LOCK:
-        _KNOWN[acct["id"]] = (time.time(), known)
-    return known
+        fetching = _KNOWN_FETCHING.setdefault(acct["id"], threading.Lock())
+    with fetching:
+        if not refresh and (known := _known_cached(acct)) is not None:
+            return known
+        imap, folders, sent_flag = connect_imap(acct)
+        try:
+            known = mail_screen.known_senders(imap, pick_sent_folder(folders, sent_flag) if folders else None)
+        finally:
+            imap.logout()
+        with _KNOWN_LOCK:
+            _KNOWN[acct["id"]] = (time.time(), known)
+        return known
+
+
+def warm_known_senders(acct):
+    """Start reading who the mailbox has written to in the background, so the first emails opened can already show
+    their pictures (message_images_trusted)."""
+    if _known_cached(acct) is None:
+        threading.Thread(target=lambda: _quietly(known_senders, acct), daemon=True).start()
+
+
+def _quietly(fn, *args):
+    try:
+        fn(*args)
+    except Exception:
+        pass
 
 
 def screening_trust(cfg, acct):
@@ -1183,6 +1208,38 @@ class Api:
         message = self.get_message(account_id, folder, uid, validity)
         return load_remote_images(message.get("html") or "")
 
+    def message_images_trusted(self, account_id, sender, folder_key=""):
+        """Do this message's pictures show without asking: the sender is trusted (rescued, let in, "Always for this
+        sender", the owner's own addresses) or someone this mailbox has written to. Never in Junk, where a sender
+        is easily forged. Cloud mailboxes keep no settings here, so they always ask."""
+        import mail_screen
+        addr = mail_screen.address(sender).lower()
+        cloud = str(account_id).startswith("cloud:")
+        if not addr or cloud or folder_key == "junk":
+            return {"auto": False, "address": addr, "can_trust": bool(addr) and not cloud}
+        acct = self._acct(account_id)
+        if mail_screen.trusted_match(addr, self._trusted(acct)):
+            return {"auto": True, "address": addr, "can_trust": True}
+        try:
+            known = known_senders(acct)
+        except Exception:   # offline: they just ask this time
+            known = set()
+        return {"auto": addr in known, "address": addr, "can_trust": True}
+
+    def trust_sender_images(self, account_id, sender):
+        """"Always for this sender": trust the address, so its pictures show by themselves from now on (and its mail
+        is never screened). It travels to the other PCs with the mailbox."""
+        import mail_screen
+        addr = mail_screen.address(sender).lower()
+        if not addr or str(account_id).startswith("cloud:"):
+            raise ValueError("This sender can't be trusted here")
+        self._log(f"CALL trust_sender_images {account_id}")
+        acct = self._acct(account_id)
+        if addr not in acct.setdefault("trusted", []):
+            acct["trusted"].append(addr)
+            self.cfg.save()
+        return {"address": addr}
+
     def _cloud_accounts(self):
         if not hasattr(self, '_cloud_provider'):
             from cloud_mail import CloudMail
@@ -1298,6 +1355,7 @@ class Api:
         folders = []
         error = None
         if acct["email"] and acct["password"]:
+            warm_known_senders(acct)
             try:
                 imap, server_folders, _ = connect_imap(acct)
                 try:
