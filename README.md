@@ -47,6 +47,11 @@ owner's x64 machine and is published with native x64 and ARM64 downloads.
   lists replies and personal addresses as "maybe", and moves your pick to a
   **Rescued** folder (Undo in Activity). Their senders are trusted from then on.
   Judged by the sender's address, never the display name.
+- ✅ **Clean up by sender** — the lines button lists who fills the folder, biggest
+  first, with **Unsubscribe** (one-click, only for senders that offer it and never
+  for spam-looking ones), **Move to Trash** and **Block** (Trash now, and new Inbox
+  mail from that site later). The first scan of a big mailbox runs in the background
+  (about 3 minutes for 34,000 emails); later ones only read new mail.
 - ✅ **Outlook.com / Hotmail / Live mailboxes** — Settings → + Add Microsoft account signs in
   with Microsoft (Microsoft no longer accepts passwords for these mailboxes)
 - ✅ Credentials protected with Windows DPAPI; settings stored locally in `%APPDATA%\SimpleMail`
