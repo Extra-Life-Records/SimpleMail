@@ -317,6 +317,16 @@
     overflow-y: auto;
   }
   #rules-list { max-height: 140px; overflow-y: auto; }
+  #rescue-list { overflow-y: auto; max-height: 52vh; margin: 6px 0 12px; }
+  .rescue-group { font-size: 0.8rem; font-weight: 700; text-transform: uppercase; letter-spacing: .04em;
+    color: var(--pico-muted-color); margin: 12px 0 4px; }
+  #rescue-list .rescue-item { display: flex; gap: 10px; align-items: flex-start; padding: 7px 4px;
+    border-bottom: 1px solid var(--pico-muted-border-color); cursor: pointer; font-weight: 400 !important; }
+  #rescue-list .rescue-item input { margin: 2px 0 0; flex-shrink: 0; width: 1.25em; height: 1.25em; }
+  .rescue-item .r-main { min-width: 0; flex: 1; }
+  .rescue-item .r-from { font-weight: 600; font-size: 0.88rem; }
+  .rescue-item .r-subject { font-size: 0.85rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .rescue-item .r-why { font-size: 0.75rem; color: var(--pico-muted-color); }
   .modal h2 { margin: 0 0 14px; font-size: 1.2rem; }
   .modal .field { margin-bottom: 12px; }
   .modal label { font-size: 0.85rem; font-weight: 600; margin-bottom: 4px; display: block; }
@@ -505,6 +515,12 @@
             <path d="M21 12a9 9 0 1 1-2.64-6.36"/><path d="M21 3v6h-6"/>
           </svg>
         </button>
+        <button id="rescue-btn" class="icon-btn" title="Find real mail in this folder" style="display:none">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="4"/>
+            <path d="m5.6 5.6 3.6 3.6M14.8 14.8l3.6 3.6M14.8 9.2l3.6-3.6M9.2 14.8l-3.6 3.6"/>
+          </svg>
+        </button>
         <button id="markall-btn" class="icon-btn" title="Mark all as read">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
             <rect x="2" y="4" width="20" height="16" rx="2"/>
@@ -646,6 +662,18 @@
     </div>
   </div>
 
+  <div class="modal-backdrop" id="rescue-backdrop">
+    <section class="modal" role="dialog" aria-labelledby="rescue-title">
+      <h2 id="rescue-title">Real mail in Junk</h2>
+      <p id="rescue-intro" style="margin:0;font-size:0.88rem;color:var(--pico-muted-color)"></p>
+      <div id="rescue-list" aria-label="Messages to rescue"></div>
+      <div class="actions">
+        <button class="outline secondary" id="rescue-cancel">Close</button>
+        <button id="rescue-go" disabled>Move to Rescued</button>
+      </div>
+    </section>
+  </div>
+
   <div class="modal-backdrop" id="agent-backdrop">
     <section class="modal" id="agent-modal" role="region" aria-labelledby="agent-title">
       <h2 id="agent-title">Mailbox agent</h2>
@@ -663,5 +691,6 @@
 <script src="compose.js"></script>
 <script src="conversation.js"></script>
 <script src="agent.js"></script>
+<script src="rescue.js"></script>
 </body>
 </html>

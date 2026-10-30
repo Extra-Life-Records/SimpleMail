@@ -314,6 +314,7 @@ async function selectFolder(key) {
   $("search-box").placeholder = ['junk','trash'].includes(key) ? `Search ${folder?.name || key}…` : 'Search all mail…';
   $("folder-title").textContent = folder ? folder.name : key;
   $("folder-count").textContent = "";
+  if (typeof updateRescueButton === "function") updateRescueButton();
   $("msg-list").innerHTML = '<div class="empty">Loading…</div>';
   $("read-header").style.display = "none";
   $("read-body").innerHTML = '<div id="loading">Select a message</div>';
