@@ -69,7 +69,7 @@ else:
     _WEBVIEW_IMPORT_ERROR = None
 
 APP_NAME = "SimpleMail"
-APP_VERSION = "1.9.10"
+APP_VERSION = "1.9.12"
 APP_REPO = "Extra-Life-Records/SimpleMail"  # owner/repo for auto-updates
 CONFIG_DIR = Path(os.environ.get("APPDATA", str(Path.home()))) / APP_NAME
 CONFIG_FILE = CONFIG_DIR / "config.json"
@@ -247,7 +247,8 @@ def connect_imap(cfg):
         if typ == "OK":
             for line in data:
                 text = line.decode("utf-8", "replace")
-                m = re.search(r'"([^"]+)"\s*$', text)
+                # Name is quoted on Fasthosts, bare on Outlook.com (Inbox, Sent, ...)
+                m = re.search(r'"([^"]+)"\s*$', text) or re.search(r'\)\s+(?:"[^"]*"|NIL)\s+([^\s"]+)\s*$', text)
                 if m:
                     name = m.group(1)
                     folders.append(name)

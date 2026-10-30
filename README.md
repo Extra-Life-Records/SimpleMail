@@ -42,6 +42,8 @@ owner's x64 machine and is published with native x64 and ARM64 downloads.
 - ✅ Click links in HTML and plain-text emails to open them in your browser
 - ✅ Mail refreshes every 30 seconds and when returning to the app, preserving
   the open email, search and message-list scroll position
+- ✅ **Outlook.com / Hotmail / Live mailboxes** — Settings → + Add Microsoft account signs in
+  with Microsoft (Microsoft no longer accepts passwords for these mailboxes)
 - ✅ Credentials protected with Windows DPAPI; settings stored locally in `%APPDATA%\SimpleMail`
 - ✅ Connection test button in Settings
 - ✅ Native ARM64 and x64 builds from the same codebase

@@ -22,7 +22,7 @@ import urllib.parse
 import urllib.request
 
 # Public client id of the "SimpleMail" app registration (not a secret).
-CLIENT_ID = os.environ.get("SIMPLEMAIL_MS_CLIENT_ID", "")
+CLIENT_ID = os.environ.get("SIMPLEMAIL_MS_CLIENT_ID", "cb0a1543-1e17-406f-91fb-32b8807f50e2")
 AUTHORITY = "https://login.microsoftonline.com/common/oauth2/v2.0"
 MAIL_SCOPES = ("https://outlook.office.com/IMAP.AccessAsUser.All "
                "https://outlook.office.com/SMTP.Send offline_access")

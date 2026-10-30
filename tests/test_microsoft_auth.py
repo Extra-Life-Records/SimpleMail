@@ -94,6 +94,15 @@ class MailappMicrosoftTests(unittest.TestCase):
         self.assertEqual(mech, "XOAUTH2")
         self.assertEqual(callback(b""), b"user=me@hotmail.co.uk\x01auth=Bearer TOKEN\x01\x01")
 
+    def test_folder_list_reads_bare_outlook_and_quoted_fasthosts_names(self):
+        imap = MagicMock(); imap.list.return_value = ("OK", [
+            b'(\HasNoChildren) "/" Inbox', b'(\HasNoChildren \Sent) "/" Sent',
+            b'(\HasNoChildren) "/" "Deleted Items"', b'(\HasNoChildren \Junk) "." "INBOX.Junk"'])
+        with patch("imaplib.IMAP4_SSL", return_value=imap):
+            _, folders, sent = mailapp.connect_imap(self.acct)
+        self.assertEqual(folders, ["Inbox", "Sent", "Deleted Items", "INBOX.Junk"])
+        self.assertEqual(sent, "Sent")
+
     def test_smtp_uses_xoauth2_and_password_accounts_unchanged(self):
         smtp = MagicMock()
         mailapp.smtp_login(smtp, self.acct)
