@@ -28,6 +28,7 @@ FASTHOSTS = ("livemail.co.uk", "fasthosts.co.uk")
 STALE_DAYS = 30                    # a PC that hasn't shared anything for a month (retired) no longer counts
 SECRETS = ("password", "smtp_password", "refresh_token")
 CLOUD = "~cloud"                   # the cloud mailboxes' sign-in travels as one more entry under this key
+TRUSTED = "simplemail:trusted"     # the cloud mailboxes' trusted senders (sync_trusted): a set of its own
 
 
 def pc_name():
@@ -80,6 +81,9 @@ class ValetUnavailable(Exception):
 class ValetStore:
     HOST_KEY = r"Software\Microsoft\Edge\NativeMessagingHosts\com.valet.browser"
 
+    def __init__(self, identity=IDENTITY):
+        self.identity = identity
+
     def _program(self):
         try:
             import winreg
@@ -109,7 +113,7 @@ class ValetStore:
 
     def others(self, pc):
         jars = []
-        for raw in self.ask({"op": "signins_get", "identity": IDENTITY, "pc": pc}).get("jars") or []:
+        for raw in self.ask({"op": "signins_get", "identity": self.identity, "pc": pc}).get("jars") or []:
             try:
                 jars.append(json.loads(raw))
             except ValueError:
@@ -117,7 +121,7 @@ class ValetStore:
         return jars
 
     def put(self, pc, jar):
-        self.ask({"op": "signins_put", "identity": IDENTITY, "pc": pc, "jar": json.dumps(jar)})
+        self.ask({"op": "signins_put", "identity": self.identity, "pc": pc, "jar": json.dumps(jar)})
 
 
 # ---- the cloud mailboxes' sign-in (aws-mail.json, written by cloud_mail.CloudMail) ---------------------
@@ -239,3 +243,42 @@ def sync(cfg, store, record, normalize, pc=None, now=None, cloud=None):
                 for k, r in mine.items()}})
             record.save(mine)
         return brought
+
+
+
+# ---- the cloud mailboxes' trusted senders ----------------------------------------------------------------
+# A cloud mailbox keeps no settings of its own on this PC, so the senders trusted there ("Always for this sender")
+# sit in config.json under cloud_trusted, by mailbox address. They travel as a set of their own (TRUSTED), not
+# inside the mailbox list, which older SimpleMail builds would read as a mailbox. Trusting is never undone, so the
+# PCs simply pool their lists.
+_shared_trusted = {}   # pc -> what this PC last handed Valet, so an unchanged list isn't sent every round
+
+
+def sync_trusted(cfg, store, pc=None, now=None):
+    """Take in the other PCs' trusted senders and share this PC's. Returns True when something new came in."""
+    pc = pc or pc_name()
+    now = now if now is not None else time.time()
+    with _round:
+        lists = {str(a).lower(): [str(e).lower() for e in v] for a, v in (cfg.data.get("cloud_trusted") or {}).items()
+                 if isinstance(v, list)}
+        grew = False
+        for other in store.others(pc):
+            if now - float(other.get("saved") or 0) > STALE_DAYS * 86400:
+                continue
+            for mailbox, entries in (other.get("trusted") or {}).items():
+                if not isinstance(entries, list):
+                    continue
+                have = lists.setdefault(str(mailbox).lower(), [])
+                for entry in entries:
+                    entry = str(entry).strip().lower()
+                    if entry and entry not in have:
+                        have.append(entry)
+                        grew = True
+        if grew:
+            cfg.data["cloud_trusted"] = lists
+            cfg.save()
+        snapshot = json.dumps(lists, sort_keys=True)
+        if lists and _shared_trusted.get(pc) != snapshot:
+            store.put(pc, {"pc": pc, "saved": now, "trusted": lists})
+            _shared_trusted[pc] = snapshot
+        return grew

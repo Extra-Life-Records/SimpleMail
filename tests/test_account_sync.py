@@ -37,6 +37,38 @@ class Cloud:
         return Store()
 
 
+class TrustedSyncTests(unittest.TestCase):
+    def setUp(self):
+        account_sync._shared_trusted.clear()
+
+    def test_pcs_pool_their_cloud_trusted_senders(self):
+        cloud = Cloud()
+        laptop, desktop = Cfg([]), Cfg([])
+        laptop.data["cloud_trusted"] = {"Hello@ELR.com": ["Sarah@Sky.com"]}
+        desktop.data["cloud_trusted"] = {"hello@elr.com": ["zayn@distrokid.com"], "other@elr.com": ["x@y.com"]}
+        self.assertFalse(account_sync.sync_trusted(laptop, cloud.store(), pc="LAPTOP", now=1000))
+        self.assertTrue(account_sync.sync_trusted(desktop, cloud.store(), pc="DESKTOP", now=1001))
+        self.assertEqual(desktop.data["cloud_trusted"]["hello@elr.com"], ["zayn@distrokid.com", "sarah@sky.com"])
+        self.assertTrue(account_sync.sync_trusted(laptop, cloud.store(), pc="LAPTOP", now=1002))
+        self.assertEqual(laptop.data["cloud_trusted"], {"hello@elr.com": ["sarah@sky.com", "zayn@distrokid.com"],
+                                                        "other@elr.com": ["x@y.com"]})
+        self.assertEqual((laptop.saves, desktop.saves), (1, 1))
+        # nothing new: nothing saved and nothing handed to Valet again
+        before = dict(cloud.jars)
+        self.assertFalse(account_sync.sync_trusted(laptop, cloud.store(), pc="LAPTOP", now=1003))
+        self.assertEqual(cloud.jars, before)
+        self.assertEqual(laptop.saves, 1)
+
+    def test_a_retired_pc_and_junk_are_ignored(self):
+        cloud = Cloud()
+        cloud.jars["OLD"] = json.dumps({"pc": "OLD", "saved": 0, "trusted": {"hello@elr.com": ["old@x.com"]}})
+        cloud.jars["ODD"] = json.dumps({"pc": "ODD", "saved": 10 ** 9, "trusted": {"hello@elr.com": "not a list"}})
+        pc = Cfg([])
+        self.assertFalse(account_sync.sync_trusted(pc, cloud.store(), pc="HERE", now=10 ** 9))
+        self.assertNotIn("cloud_trusted", pc.data)
+        self.assertNotIn("HERE", cloud.jars)   # nothing of its own to share
+
+
 class PC:
     def __init__(self, cloud, name, accounts):
         self.name, self.cloud = name, cloud

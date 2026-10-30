@@ -72,7 +72,7 @@ else:
     _WEBVIEW_IMPORT_ERROR = None
 
 APP_NAME = "SimpleMail"
-APP_VERSION = "1.9.23"
+APP_VERSION = "1.9.24"
 APP_REPO = "Extra-Life-Records/SimpleMail"  # owner/repo for auto-updates
 CONFIG_DIR = Path(os.environ.get("APPDATA", str(Path.home()))) / APP_NAME
 CONFIG_FILE = CONFIG_DIR / "config.json"
@@ -1211,15 +1211,17 @@ class Api:
     def message_images_trusted(self, account_id, sender, folder_key=""):
         """Do this message's pictures show without asking: the sender is trusted (rescued, let in, "Always for this
         sender", the owner's own addresses) or someone this mailbox has written to. Never in Junk, where a sender
-        is easily forged. Cloud mailboxes keep no settings here, so they always ask."""
+        is easily forged. A cloud mailbox has only its trusted list: who it has written to isn't kept where SimpleMail
+        can read it cheaply."""
         import mail_screen
         addr = mail_screen.address(sender).lower()
-        cloud = str(account_id).startswith("cloud:")
-        if not addr or cloud or folder_key == "junk":
-            return {"auto": False, "address": addr, "can_trust": bool(addr) and not cloud}
+        if not addr or folder_key == "junk":
+            return {"auto": False, "address": addr, "can_trust": bool(addr)}
         acct = self._acct(account_id)
         if mail_screen.trusted_match(addr, self._trusted(acct)):
             return {"auto": True, "address": addr, "can_trust": True}
+        if self._is_cloud(acct):
+            return {"auto": False, "address": addr, "can_trust": True}
         try:
             known = known_senders(acct)
         except Exception:   # offline: they just ask this time
@@ -1228,16 +1230,24 @@ class Api:
 
     def trust_sender_images(self, account_id, sender):
         """"Always for this sender": trust the address, so its pictures show by themselves from now on (and its mail
-        is never screened). It travels to the other PCs with the mailbox."""
+        is never screened). It travels to the other PCs: with the mailbox, or for a cloud mailbox as its own set."""
         import mail_screen
         addr = mail_screen.address(sender).lower()
-        if not addr or str(account_id).startswith("cloud:"):
+        if not addr:
             raise ValueError("This sender can't be trusted here")
         self._log(f"CALL trust_sender_images {account_id}")
         acct = self._acct(account_id)
-        if addr not in acct.setdefault("trusted", []):
-            acct["trusted"].append(addr)
+        if self._is_cloud(acct):
+            mailbox = (acct.get("email") or "").strip().lower()
+            if "@" not in mailbox:
+                raise ValueError("This sender can't be trusted here")
+            trusted = self.cfg.data.setdefault("cloud_trusted", {}).setdefault(mailbox, [])
+        else:
+            trusted = acct.setdefault("trusted", [])
+        if addr not in trusted:
+            trusted.append(addr)
             self.cfg.save()
+            self._share_soon()
         return {"address": addr}
 
     def _cloud_accounts(self):
@@ -1928,14 +1938,25 @@ class Api:
         """The account's trusted senders plus the owner's own addresses and
         business domains (a personal domain like live.co.uk is too broad)."""
         import mail_screen
-        trusted = list(acct.get("trusted", []))
-        for other in self.cfg.accounts():
+        trusted = list(self._cloud_trusted(acct) if self._is_cloud(acct) else acct.get("trusted", []))
+        own = list(self.cfg.accounts())
+        if self._is_cloud(acct):   # the other cloud mailboxes are the owner's too (the IMAP side keeps none of them)
+            own += list(self._cloud_accounts().accounts.values())
+        for other in own:
             for addr in (other.get("email", ""), other.get("from_email", "")):
                 addr = addr.strip().lower()
                 if "@" in addr:
                     host = mail_screen.domain(addr)
                     trusted.append(addr if host in mail_screen.PERSONAL_DOMAINS else host)
         return trusted
+
+    @staticmethod
+    def _is_cloud(acct):
+        return str(acct.get("id", "")).startswith("cloud:")
+
+    def _cloud_trusted(self, acct):
+        """A cloud mailbox's trusted senders (config.json cloud_trusted, by its address; account_sync.sync_trusted)."""
+        return list((self.cfg.data.get("cloud_trusted") or {}).get((acct.get("email") or "").strip().lower(), []))
 
     def find_real_mail(self, account_id, server_folder):
         """Scan a folder (usually Junk) for mail from real people."""
@@ -2196,6 +2217,7 @@ class AccountSyncer(threading.Thread):
         self.store = account_sync.ValetStore()
         self.record = account_sync.Record(CONFIG_DIR / "account-sync.json")
         self.cloud = account_sync.CloudSignIn(CONFIG_DIR)   # the cloud mailboxes' sign-in travels too
+        self.trusted = account_sync.ValetStore(account_sync.TRUSTED)   # and their trusted senders
 
     def run(self):
         while True:
@@ -2206,6 +2228,10 @@ class AccountSyncer(threading.Thread):
                 pass  # Valet locked or not installed: next round
             except Exception:
                 pass  # never take the app down over sharing; next round
+            try:
+                account_sync.sync_trusted(self.cfg, self.trusted)
+            except Exception:
+                pass  # locked, not installed or unreadable: next round
             self.first.set()
             self.wake.wait(120)
             self.wake.clear()
