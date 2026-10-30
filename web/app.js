@@ -213,28 +213,47 @@ function accountProviderBadge(account, accounts = state.accounts) {
   return duplicated ? (cloud ? "Cloud" : "Existing mailbox") : "";
 }
 
+function accountChip(a) {
+  const badge = accountProviderBadge(a);
+  return `<span class="acct-dot" style="background:${escapeHtml(a.color)}"></span>
+    <span class="acct-label">${escapeHtml(a.label)}${badge ? `<small class="acct-provider">${badge}</small>` : ""}</span>`;
+}
+
+// The mailbox switcher sits at the bottom of the sidebar: one button showing
+// the open mailbox, which opens a menu of the others above it.
 function renderAccounts() {
   const box = $("accounts");
+  const toggle = $("account-switch");
   box.innerHTML = "";
-  if (state.accounts.length < 2 && state.accounts.length !== 0) {
-    // single account: no switcher chrome needed, but still show whose mail
-    const a = state.accounts[0];
-    box.innerHTML = `<div class="account single" title="${escapeHtml(a.identity)}">
-      <span class="acct-dot" style="background:${escapeHtml(a.color)}"></span>
-      <span class="acct-label">${escapeHtml(a.label)}</span></div>`;
-    return;
-  }
+  const current = activeAccount() || state.accounts[0];
+  const several = state.accounts.length > 1;
+  toggle.hidden = !current;
+  toggle.disabled = !several;
+  toggle.title = current ? (current.identity || current.email || "") : "";
+  toggle.innerHTML = current ? accountChip(current) + (several
+    ? '<svg class="chevron" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"><path d="m18 15-6-6-6 6"/></svg>' : "") : "";
+  if (!several) closeAccountMenu();
   state.accounts.forEach((a) => {
     const btn = document.createElement("button");
     btn.className = "account" + (a.id === state.activeAccountId ? " active" : "");
     btn.title = a.identity;
-    const badge = accountProviderBadge(a);
-    btn.innerHTML = `<span class="acct-dot" style="background:${escapeHtml(a.color)}"></span>
-      <span class="acct-label">${escapeHtml(a.label)}${badge ? `<small class="acct-provider">${badge}</small>` : ""}</span>`;
-    btn.addEventListener("click", () => selectAccount(a.id));
+    btn.innerHTML = accountChip(a);
+    btn.addEventListener("click", () => { closeAccountMenu(); selectAccount(a.id); });
     box.appendChild(btn);
   });
   if (typeof renderAgentNavigation === "function") renderAgentNavigation();
+}
+
+function openAccountMenu() {
+  if (state.accounts.length < 2) return;
+  $("accounts").hidden = false;
+  $("account-switch").setAttribute("aria-expanded", "true");
+  $("accounts").querySelector(".account.active")?.scrollIntoView({ block: "nearest" });
+}
+
+function closeAccountMenu() {
+  $("accounts").hidden = true;
+  $("account-switch").setAttribute("aria-expanded", "false");
 }
 
 async function selectAccount(accountId) {
@@ -272,31 +291,61 @@ async function selectAccount(accountId) {
 
 /* ---------------- folders ---------------- */
 
+// Folders shown in the sidebar under Inbox, in this order; any other server
+// folder goes under "More folders" so nothing is unreachable.
+const SIDEBAR_FOLDERS = ["screener", "rescued", "shop orders", "updates", "social", "promotions",
+  "sent", "drafts", "archive", "junk", "trash"];
+
+function sidebarRank(f) {
+  const byKey = SIDEBAR_FOLDERS.indexOf(f.key);
+  return byKey >= 0 ? byKey : SIDEBAR_FOLDERS.indexOf(String(f.name || "").toLowerCase());
+}
+
 function renderFolders() {
   const box = $("folders");
+  const more = $("folders-more");
   box.innerHTML = "";
+  more.innerHTML = "";
   const icons = {
     inbox: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 12h-6l-2 3h-4l-2-3H2"/><path d="M5.45 5.11 2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z"/></svg>',
     sent: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m22 2-7 20-4-9-9-4z"/><path d="M22 2 11 13"/></svg>',
     drafts: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 20h9"/><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4z"/></svg>',
     junk: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3z"/><path d="M12 9v4"/><path d="M12 17h.01"/></svg>',
     trash: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 6h18"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"/><path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>',
+    archive: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="3" width="20" height="5" rx="1"/><path d="M4 8v11a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8"/><path d="M10 12h4"/></svg>',
+    screener: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 3H2l8 9.46V19l4 2v-8.54z"/></svg>',
+    rescued: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="4"/><path d="m4.93 4.93 4.24 4.24M14.83 14.83l4.24 4.24M14.83 9.17l4.24-4.24M4.93 19.07l4.24-4.24"/></svg>',
+    "shop orders": '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 2 3 6v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V6l-3-4z"/><path d="M3 6h18"/><path d="M16 10a4 4 0 0 1-8 0"/></svg>',
+    updates: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 2v20l2-1 2 1 2-1 2 1 2-1 2 1 2-1 2 1V2l-2 1-2-1-2 1-2-1-2 1-2-1-2 1z"/><path d="M8 8h8M8 12h8M8 16h5"/></svg>',
+    social: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75"/></svg>',
+    promotions: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2H2v10l9.29 9.29a1 1 0 0 0 1.41 0l8.59-8.59a1 1 0 0 0 0-1.41z"/><circle cx="7" cy="7" r="1.5"/></svg>',
   };
+  const folderIcon = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>';
+  const shown = [], rest = [];
   state.folders.forEach((f) => {
     if (f.key === "inbox") {
-      $("inbox-btn").innerHTML = `<span>Inbox</span>` + (f.unread > 0 ? `<span class="badge">${f.unread > 99 ? "99+" : f.unread}</span>` : "");
+      $("inbox-btn").innerHTML = (icons.inbox) + `<span class="folder-name">Inbox</span>` + (f.unread > 0 ? `<span class="badge">${f.unread > 99 ? "99+" : f.unread}</span>` : "");
       return;
     }
+    (sidebarRank(f) >= 0 ? shown : rest).push(f);
+  });
+  shown.sort((a, b) => sidebarRank(a) - sidebarRank(b));
+  const button = (f) => {
     const btn = document.createElement("button");
     btn.className = "folder" + (f.key === state.currentFolder ? " active" : "");
     btn.dataset.key = f.key;
-    // only show unread badge on Inbox (user wants Junk/Trash quiet)
-    const badge = f.key === "inbox" && f.unread > 0
-      ? `<span class="badge">${f.unread > 99 ? "99+" : f.unread}</span>` : "";
-    btn.innerHTML = (icons[f.key] || "") + `<span>${f.name}</span>` + badge;
+    btn.title = f.name;
+    // only Inbox carries an unread badge (user wants Junk/Trash quiet)
+    const icon = icons[f.key] || icons[String(f.name || "").toLowerCase()] || folderIcon;
+    btn.innerHTML = icon + `<span class="folder-name">${escapeHtml(f.name)}</span>`;
     btn.addEventListener("click", () => selectFolder(f.key));
-    box.appendChild(btn);
-  });
+    return btn;
+  };
+  shown.forEach((f) => box.appendChild(button(f)));
+  rest.forEach((f) => more.appendChild(button(f)));
+  $("more-folders").hidden = !rest.length;
+  // keep the open folder visible even when it lives under "More folders"
+  if (rest.some((f) => f.key === state.currentFolder)) $("more-folders").open = true;
 }
 
 async function selectFolder(key) {
@@ -959,6 +1008,13 @@ async function init() {
   $("draft-btn").addEventListener("click", saveDraft);
   $("cancel-btn").addEventListener("click", discardCompose);
   $("settings-btn").addEventListener("click", openSettings);
+  $("account-switch").addEventListener("click", (e) => {
+    e.stopPropagation();
+    if ($("accounts").hidden) openAccountMenu(); else closeAccountMenu();
+  });
+  document.addEventListener("click", (e) => {
+    if (!$("account-switcher").contains(e.target)) closeAccountMenu();
+  });
   $("cloud-settings").addEventListener("click", openSettings);
   $("cloud-owner-settings").addEventListener("click", async () => {
     try {
@@ -1011,6 +1067,7 @@ async function init() {
   window.addEventListener("blur", closeCtxMenu);
   document.addEventListener("keydown", (e) => {
     if (e.key === "Escape") {
+      if (!$("accounts").hidden) { closeAccountMenu(); $("account-switch").focus(); return; }
       if ($("agent-backdrop").classList.contains("show")) return;
       if ($("compose-backdrop").classList.contains("show")) { closeCompose(); return; }
       $("settings-backdrop").classList.remove("show");
