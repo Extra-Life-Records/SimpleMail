@@ -24,6 +24,23 @@ let refreshTimer = null;
 let mailSearch = null;
 let searchTimer = null;
 
+// Each folder's last list, so going back to a folder shows it at once while a
+// quiet refresh runs behind it. Keyed by account AND folder so mail never
+// crosses mailboxes. Entries share the shown array, so read/unread flips stay.
+const folderCache = new Map();    // cacheKey -> {messages, validity}
+const folderFetches = new Map();  // cacheKey -> {promise, epoch}: list reads in flight
+let loadedFolder = null;          // cacheKey whose list state.messages holds
+let mailEpoch = 0;                // bumped by each change to mail; older reads are not reused
+let prefetchRun = 0;
+const cacheKey = (accountId, key) => accountId + "\u0000" + key;
+
+function rememberFolder() {
+  const key = cacheKey(state.activeAccountId, state.currentFolder);
+  const folder = state.folders.find((f) => f.key === state.currentFolder);
+  if (mailSearch || loadedFolder !== key || !folder) return;
+  folderCache.set(key, { messages: state.messages, validity: folder.validity || null });
+}
+
 function resetMailSearch() {
   clearTimeout(searchTimer);
   mailSearch = null;
@@ -41,6 +58,8 @@ function queueMailSearch() {
   resetMailSearch();
   mailboxView.requests++;
   messageReadRequest++;
+  rememberFolder();
+  loadedFolder = null;  // the list is about to hold search results
   state.selectedUid = null;
   $("read-header").style.display = "none";
   $("read-body").innerHTML = '<div id="loading">Select a message</div>';
@@ -114,8 +133,12 @@ async function mailAction(action) {
   const view = mailboxView;
   view.actions++;
   view.requests++;
+  mailEpoch++;
   try { return await action(); }
-  finally { view.actions--; view.requests++; }
+  finally {
+    view.actions--; view.requests++; mailEpoch++;
+    if (view.stale && !view.actions && view === mailboxView) { view.stale = false; Promise.resolve().then(() => loadMessages({ quiet: true })); }
+  }
 }
 
 function startMailRefresh() {
@@ -261,6 +284,9 @@ async function selectAccount(accountId) {
   ++composeRequest;
   if (typeof leaveAgentWorkspace === "function" && !leaveAgentWorkspace()) return;
   if (!state.accounts.some((a) => a.id === accountId)) return;
+  rememberFolder();
+  loadedFolder = null;
+  ++prefetchRun;
   const view = resetMailboxView();
   state.activeAccountId = accountId;
   for (const id of ["agent-btn", "needs-you-btn", "activity-btn"]) $(id).hidden = activeAccount()?.provider === "cloud";
@@ -287,6 +313,66 @@ async function selectAccount(accountId) {
   state.currentFolder = "inbox";
   renderFolders();
   if (typeof agentVisible !== "function" || !agentVisible()) await selectFolder("inbox");
+  if (state.activeAccountId === accountId) prefetchFolders(accountId);
+}
+
+// After the Inbox is up, read the sidebar folders one at a time (Sent first) so
+// the first click on each is instant too. One connection at a time: mail servers
+// cap connections per user, and a burst would slow the click it is meant to help.
+async function prefetchFolders(accountId) {
+  const run = ++prefetchRun;
+  const live = () => run === prefetchRun && state.activeAccountId === accountId;
+  const order = (f) => (f.key === "sent" ? -1 : sidebarRank(f));
+  const targets = state.folders.filter((f) => f.key !== "inbox" && f.server && sidebarRank(f) >= 0)
+    .sort((a, b) => order(a) - order(b));
+  for (const folder of targets) {
+    const key = cacheKey(accountId, folder.key);
+    if (!live()) return;
+    if (folderCache.has(key) || state.currentFolder === folder.key) continue;
+    try {
+      const { res, localDrafts } = await fetchFolder(accountId, folder);
+      if (!live()) return;
+      if (!state.folders.includes(folder)) return;
+      folder.unread = res.folder_unread == null ? res.unread : res.folder_unread;
+      const inbox = state.folders.find((f) => f.key === "inbox");
+      if (inbox && res.inbox_unread != null) { inbox.unread = res.inbox_unread; renderFolders(); }
+      // the open folder's list is state.messages itself; never swap it from here
+      if (folderCache.has(key) || state.currentFolder === folder.key) continue;
+      folderCache.set(key, { messages: localDraftEnvelopes(localDrafts).concat(res.envelopes),
+                             validity: res.validity || null });
+    } catch { /* opening the folder shows the error */ }
+  }
+}
+
+// Read one folder's list (plus this device's drafts for Drafts). A selectFolder
+// load may share a read already in flight for the same folder, unless mail
+// changed since that read began.
+async function fetchFolder(accountId, folder, { join = true, onLocalDrafts = null } = {}) {
+  const list = () => {
+    const key = cacheKey(accountId, folder.server);
+    const running = folderFetches.get(key);
+    if (join && running && running.epoch === mailEpoch) return running.promise;
+    const promise = Promise.resolve(api.list_messages(accountId, folder.server)).finally(() => {
+      if (folderFetches.get(key)?.promise === promise) folderFetches.delete(key);
+    });
+    folderFetches.set(key, { promise, epoch: mailEpoch });
+    return promise;
+  };
+  if (folder.key !== "drafts" || !api.list_compose_drafts) return { res: await list(), localDrafts: [], cloudError: null };
+  const pendingLocal = Promise.resolve(api.list_compose_drafts(accountId)).then(drafts => {
+    if (typeof composeRecoveryDrafts === "function") drafts = composeRecoveryDrafts(accountId, drafts);
+    if (onLocalDrafts) onLocalDrafts(drafts);
+    return drafts;
+  });
+  const results = await Promise.allSettled([
+    folder.server ? list() : Promise.resolve({envelopes: [], unread: 0}),
+    pendingLocal,
+  ]);
+  if (results[1].status === "rejected") throw results[1].reason;
+  const localDrafts = results[1].value;
+  if (results[0].status === "rejected" && !localDrafts.length) throw results[0].reason;
+  return { res: results[0].status === "fulfilled" ? results[0].value : {envelopes: [], unread: 0},
+           localDrafts, cloudError: results[0].status === "rejected" ? String(results[0].reason) : null };
 }
 
 /* ---------------- folders ---------------- */
@@ -352,6 +438,8 @@ async function selectFolder(key) {
   if (typeof composeVisible === "function" && composeVisible() && !(await closeCompose())) return;
   ++composeRequest;
   if (typeof leaveAgentWorkspace === "function" && !leaveAgentWorkspace()) return;
+  rememberFolder();
+  loadedFolder = null;
   resetMailboxView();
   state.currentFolder = key;
   state.selectedUid = null;
@@ -365,10 +453,21 @@ async function selectFolder(key) {
   $("folder-count").textContent = "";
   if (typeof updateRescueButton === "function") updateRescueButton();
   if (typeof updateSendersButton === "function") updateSendersButton();
-  $("msg-list").innerHTML = '<div class="empty">Loading…</div>';
   $("read-header").style.display = "none";
   $("read-body").innerHTML = '<div id="loading">Select a message</div>';
-  return loadMessages();
+  const cached = folder && folderCache.get(cacheKey(state.activeAccountId, key));
+  if (cached) {
+    // show the last list now; a quiet refresh swaps in the server's latest
+    state.messages = cached.messages;
+    folder.validity = cached.validity;
+    loadedFolder = cacheKey(state.activeAccountId, key);
+    renderMessages();
+    $("msg-list").scrollTop = 0;
+    updateUnreadCount();
+    return loadMessages({ quiet: true, join: true });
+  }
+  $("msg-list").innerHTML = '<div class="empty">Loading…</div>';
+  return loadMessages({ join: true });
 }
 
 function localDraftEnvelopes(drafts) {
@@ -379,7 +478,7 @@ function localDraftEnvelopes(drafts) {
       : "Delivery needs checking · Open for details"}));
 }
 
-async function loadMessages({ quiet = false } = {}) {
+async function loadMessages({ quiet = false, join = false } = {}) {
   if (mailSearch) { if (!quiet) return loadSearchResults(); return; }
   const folder = state.folders.find((f) => f.key === state.currentFolder);
   if (!api || !state.activeAccountId || !folder) return;
@@ -389,32 +488,23 @@ async function loadMessages({ quiet = false } = {}) {
   view.loads++;
   try {
     const accountId = state.activeAccountId;
-    let res;
-    let localDrafts = [];
-    let cloudError = null;
-    if (folder.key === "drafts" && api.list_compose_drafts) {
-      const pendingLocal = Promise.resolve(api.list_compose_drafts(accountId)).then(drafts => {
-        if (typeof composeRecoveryDrafts === "function") drafts = composeRecoveryDrafts(accountId, drafts);
-        // Device drafts remain usable while remote folder pagination is pending.
-        // A late response must never replace another mailbox or newer refresh.
-        if (!quiet && drafts.length && view === mailboxView && request === view.requests) {
-          const scrollTop = $("msg-list").scrollTop;
-          state.messages = localDraftEnvelopes(drafts).concat(state.messages.filter(message => !message.localDraftId));
-          renderMessages();
-          $("msg-list").scrollTop = scrollTop;
-        }
-        return drafts;
-      });
-      const results = await Promise.allSettled([
-        folder.server ? api.list_messages(accountId, folder.server) : Promise.resolve({envelopes: [], unread: 0}),
-        pendingLocal,
-      ]);
-      if (results[1].status === "rejected") throw results[1].reason;
-      localDrafts = results[1].value;
-      if (results[0].status === "rejected" && !localDrafts.length) throw results[0].reason;
-      if (results[0].status === "rejected") cloudError = String(results[0].reason);
-      res = results[0].status === "fulfilled" ? results[0].value : {envelopes: [], unread: 0};
-    } else res = await api.list_messages(accountId, folder.server);
+    const { res, localDrafts, cloudError } = await fetchFolder(accountId, folder, { join, onLocalDrafts: drafts => {
+      // Device drafts remain usable while remote folder pagination is pending.
+      // A late response must never replace another mailbox or newer refresh.
+      if (!quiet && drafts.length && view === mailboxView && request === view.requests) {
+        const scrollTop = $("msg-list").scrollTop;
+        state.messages = localDraftEnvelopes(drafts).concat(state.messages.filter(message => !message.localDraftId));
+        renderMessages();
+        $("msg-list").scrollTop = scrollTop;
+      }
+    }});
+    if (view === mailboxView && request !== view.requests && quiet && join) {
+      // A cached folder's refresh lost to a click (opening a message, a move).
+      // Read it again once that is done, or the cached list stays up until
+      // the 30-second refresh.
+      if (view.actions) view.stale = true;
+      else Promise.resolve().then(() => loadMessages({ quiet: true }));
+    }
     if (view !== mailboxView || request !== view.requests) return;
     if (activeAccount()?.provider === "cloud") showCloudStatus(cloudError);
     if (folder.validity && res.validity && folder.validity !== res.validity) {
@@ -435,6 +525,8 @@ async function loadMessages({ quiet = false } = {}) {
     const inbox = state.folders.find((f) => f.key === "inbox");
     if (inbox && res.inbox_unread != null) inbox.unread = res.inbox_unread;
     updateUnreadCount();
+    loadedFolder = cacheKey(accountId, folder.key);
+    rememberFolder();
   } catch (e) {
     if (view !== mailboxView || request !== view.requests) return;
     if (activeAccount()?.provider === "cloud") showCloudStatus(String(e));
@@ -1007,6 +1099,8 @@ async function testConnection() {
 async function reloadAccounts() {
   const data = await api.get_config();
   showCloudStatus(data.cloud_error);
+  folderCache.clear();  // a mailbox's server or sign-in may have changed
+  loadedFolder = null;
   state.accounts = data.accounts || [];
   applyScale(data.ui_scale || "default");
   if (!state.accounts.length) {
