@@ -17,12 +17,15 @@ def dispatch(table, s3, ses, claims, path, data):
         raise service.Denied('Use the owner SimpleMail sign-in for manual mail')
     if os.environ.get('HUMAN_SENDING_ENABLED') != 'true':
         raise service.Denied('Manual replacement sending remains disabled')
-    match = re.fullmatch(r'/human/mailboxes/([a-z0-9-]+)/send', path)
+    match = re.fullmatch(r'/human/mailboxes/([a-z0-9-]+)/(send|sent-copy)', path)
     if not match: raise ValueError('Unknown manual mail endpoint')
     subject = claims['sub']
     admin = table.get_item(Key={'pk': 'ADMIN', 'sk': subject}, ConsistentRead=True).get('Item')
     if not admin or not admin.get('enabled'): raise service.Denied('Owner access required')
     item = service.authorize(table, match[1], subject)
+    if match[2] == 'sent-copy':
+        import external_sent
+        return external_sent.save(table, s3, item, subject, data)
     return service.send(table, s3, ses, item, subject, data, human=True)
 
 

@@ -18,7 +18,9 @@ FOLDERS = ('Inbox', 'Sent', 'Drafts', 'Junk', 'Trash')
 def route_cloud(method):
     @functools.wraps(method)
     def routed(self, account_id, *args, **kwargs):
-        if str(account_id).startswith(PREFIX):
+        from cloud_storage_bridge import target
+        bound = not str(account_id).startswith(PREFIX) and target(self.cfg.account(account_id))
+        if str(account_id).startswith(PREFIX) or bound:
             self._acct(account_id)
             adapter = self._cloud_accounts()
             return getattr(adapter, method.__name__)(account_id, *args, **kwargs)
@@ -37,16 +39,31 @@ class CloudAccounts:
         self.accounts = {PREFIX + row['name']: {
             'id': PREFIX + row['name'], 'provider': 'cloud',
             'label': row['address'], 'email': row['address'], 'identity': row['address'],
-            'color': '#2563eb',
+            'color': '#2563eb', 'generation': row.get('generation'),
             'signature': self.owner.cfg.data.get('cloud_signatures', {}).get(PREFIX + row['name'], ''),
             'rules': {}, 'assignment': row['state'], 'folders': row.get('folders', list(FOLDERS))}
             for row in rows if re.fullmatch(r'[a-z0-9_-]+', row['name'])}
-        return list(self.accounts.values())
+        visible = list(self.accounts.values())
+        from cloud_storage_bridge import target
+        for local in self.owner.cfg.accounts():
+            mailbox = target(local)
+            if not mailbox:
+                continue
+            row = next((r for r in rows if r['name'] == mailbox), None)
+            if (not row or row.get('generation') != local['cloud_generation'] or
+                    row.get('address') != local['email'] or not row.get('external_sent_copy')):
+                raise ValueError('Bound mailbox is unavailable or changed; no IMAP fallback')
+            self.accounts[local['id']] = {**self.accounts[PREFIX + mailbox],
+                'id': local['id'], 'label': local['label'], 'identity': local['from_email'],
+                'email': local['from_email'], 'signature': local.get('signature', ''),
+                'storage_mailbox': mailbox, 'external_sent_copy': True}
+        return visible
 
     def request(self, account, method, path='', data=None):
         if account not in self.accounts:
             raise ValueError('Mailbox is not available to this sign-in')
-        return self.transport.cloud_request(method, '/mailboxes/' + account[len(PREFIX):] + path, data)
+        mailbox = self.accounts[account].get('storage_mailbox', account[len(PREFIX):])
+        return self.transport.cloud_request(method, '/mailboxes/' + mailbox + path, data)
 
     @staticmethod
     def mid(uid):
@@ -91,6 +108,9 @@ class CloudAccounts:
                             for f in self.accounts[account].get('folders', FOLDERS)], 'error': None}
 
     def list_messages(self, account, folder):
+        if self.accounts[account].get('storage_mailbox') and self.folder(folder) == 'Sent':
+            from cloud_storage_bridge import flush
+            flush(self, account)
         rows = self.rows(account, self.folder(folder))
         envelopes = [self.envelope(r) for r in rows]
         unread = sum(not r['seen'] for r in envelopes)
@@ -183,6 +203,9 @@ class CloudAccounts:
                 'date': row.get('date', ''), 'text': row.get('body', ''), 'attachments': attachments}
 
     def send_compose_draft(self, account, draft_id, revision):
+        if self.accounts.get(account, {}).get('storage_mailbox'):
+            from cloud_storage_bridge import send
+            return send(self, account, draft_id, revision)
         from mailbox_agent import recipients
         import json
         if account not in self.accounts:

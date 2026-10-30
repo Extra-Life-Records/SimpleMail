@@ -102,6 +102,8 @@ ACCOUNT_DEFAULTS = {
     "smtp_password": "",     # SMTP password override (e.g. a Resend API key)
     "signature": "",
     "rules": {},             # learned sender-domain -> folder moves, per account
+    "cloud_mailbox": "",     # explicit migration binding; never inferred from a label
+    "cloud_generation": "",
 }
 
 # Legacy (v1.0.x) single-account keys, migrated into accounts[0] on first load.
@@ -213,6 +215,8 @@ def smtp_credentials(acct):
 
 def connect_imap(cfg):
     """Open an authenticated IMAP connection. Returns (imap, folder_list)."""
+    if cfg.get('cloud_mailbox'):
+        raise ValueError('This mailbox uses cloud storage; IMAP fallback is disabled')
     import imaplib
     imap = imaplib.IMAP4_SSL(cfg["imap_host"], int(cfg["imap_port"]), timeout=30)
     imap.login(cfg["email"], cfg["password"])
@@ -595,11 +599,9 @@ def html_to_text(html):
     return text.strip() or "(empty html message)"
 
 
-def send_message(acct, to, subject, body, body_html=None, save_sent=True,
+def build_message(acct, to, subject, body, body_html=None,
                  cc="", bcc="", in_reply_to="", references="", message_id=None, attachments=None):
-    """Send via the ACCOUNT'S OWN SMTP as the ACCOUNT'S OWN identity, then
-    append a copy to that same account's Sent folder.
-
+    """Build the message as the account's own identity, without sending it.
     The From address is derived here from the account and nowhere else -
     callers cannot supply one, so a message can never leave a mailbox under
     another account's identity."""
@@ -624,6 +626,15 @@ def send_message(acct, to, subject, body, body_html=None, save_sent=True,
     for attachment in attachments or []:
         maintype, subtype = attachment["content_type"].split("/", 1)
         msg.add_attachment(attachment["data"], maintype=maintype, subtype=subtype, filename=attachment["name"])
+    return msg
+
+
+def send_message(acct, to, subject, body, body_html=None, save_sent=True,
+                 cc="", bcc="", in_reply_to="", references="", message_id=None, attachments=None):
+    if acct.get('cloud_mailbox'):
+        raise ValueError('Use the owner cloud storage route for this mailbox')
+    msg = build_message(acct, to, subject, body, body_html, cc, bcc, in_reply_to,
+                        references, message_id, attachments)
     smtp_user, smtp_password = smtp_credentials(acct)
     with smtplib.SMTP(acct["smtp_host"], int(acct["smtp_port"]), timeout=30) as smtp:
         smtp.ehlo()
@@ -1134,7 +1145,9 @@ class Api:
     def _acct(self, account_id):
         """Resolve an account id to its config. Raises on unknown ids -
         NO fallback account, ever. A fallback is how mail crosses accounts."""
-        if str(account_id).startswith('cloud:'):
+        from cloud_storage_bridge import target
+        bound = not str(account_id).startswith('cloud:') and target(self.cfg.account(account_id))
+        if str(account_id).startswith('cloud:') or bound:
             provider = self._cloud_accounts()
             if account_id not in provider.accounts:
                 provider.discover()
@@ -1170,6 +1183,8 @@ class Api:
                 "has_smtp_password": bool(acct.get("smtp_password") or "smtp_password" in acct.get("_locked_credentials", {})),
                 "signature": acct.get("signature", ""),
                 "rules": acct.get("rules", {}),
+                "provider": "cloud" if acct.get('cloud_mailbox') else "imap",
+                "storage_mailbox": acct.get('cloud_mailbox', ''),
             })
         cloud_error = None
         cloud_configured = self._cloud_accounts().transport.cloud_config()['configured']
@@ -1232,6 +1247,17 @@ class Api:
         cloud_ids = set()
         cloud_signatures = dict(self.cfg.data.get("cloud_signatures", {}))
         for raw in incoming:
+            # A bound legacy identity keeps its stable draft/account ID and SMTP
+            # settings. The cloud-style settings UI edits only its signature.
+            bound = next((a for a in self.cfg.accounts() if a['id'] == raw.get('id') and a.get('cloud_mailbox')), None)
+            if bound:
+                acct = dict(bound)
+                if 'signature' in raw:
+                    if not isinstance(raw['signature'], str):
+                        raise ValueError('Signature must be text')
+                    acct['signature'] = raw['signature']
+                accounts.append(acct); seen_ids.add(acct['id'])
+                continue
             if str(raw.get("id", "")).startswith("cloud:") or raw.get("provider") == "cloud":
                 account_id = raw.get("id", "")
                 if not str(account_id).startswith("cloud:"):
@@ -1997,7 +2023,7 @@ def main():
     # each toast labelled with its mailbox so arrivals are never ambiguous.
     pollers = []
     for acct in cfg.accounts():
-        if acct["email"] and acct["password"]:
+        if acct["email"] and acct["password"] and not acct.get('cloud_mailbox'):
             poller = MailPoller(acct)
             poller.start()
             pollers.append(poller)
