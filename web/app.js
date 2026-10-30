@@ -529,7 +529,7 @@ async function openMessage(uid, el) {
     const msg = await mailAction(() => api.get_message(accountId, folder.server, folder.uid, folder.validity));
     if (view !== mailboxView || request !== messageReadRequest) return;
     $("read-header").style.display = "block";
-    if (typeof resetConversation === "function") resetConversation(accountId, uid, msg.message_ref);
+    if (typeof resetConversation === "function") resetConversation(accountId, uid, msg.threaded === false ? null : msg.message_ref);
     $("read-subject").textContent = msg.subject;
     $("read-meta").innerHTML =
       `<div class="sender-line">${escapeHtml(msg.sender)}</div>` +
