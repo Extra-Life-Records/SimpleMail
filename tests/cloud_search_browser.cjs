@@ -60,7 +60,7 @@ const path = require('node:path');
     await page.evaluate(()=>resolveOld());
     assert.equal(await page.locator('.msg').count(),0);
     await search.fill('old'); await page.waitForFunction(()=>window.pendingSearch);
-    await page.locator('#accounts button').nth(1).click();
+    await page.locator('#account-switch').click(); await page.locator('#accounts button').nth(1).click();
     await page.getByText('Ordinary inbox',{exact:true}).waitFor();
     await page.evaluate(()=>pendingSearch());
     assert.equal(await page.locator('.msg').count(),1);

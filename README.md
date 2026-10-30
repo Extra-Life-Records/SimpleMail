@@ -17,7 +17,10 @@ and main Inbox / Needs you / Activity navigation. See [connection instructions](
 [implementation plan](PLAN.md). This build has been installed and checked on the
 owner's x64 machine and is published with native x64 and ARM64 downloads.
 
-- ✅ **Inbox, Needs you, Activity** — main navigation; other mail folders are under Folders
+- ✅ **Inbox, Needs you, Activity** — main navigation, with the mail folders always listed under it
+  (Screener, Rescued, Shop Orders, Updates, Social, Promotions, Sent, Drafts, Archive, Junk, Trash; any other
+  server folder is under More folders)
+- ✅ **Mailbox switcher** — a drop-up menu at the bottom of the sidebar
 - ✅ **Real HTML email rendering** (sandboxed; remote images blocked until Load images)
 
 - ✅ **Compose with signature** — set it once in Settings, auto-appended

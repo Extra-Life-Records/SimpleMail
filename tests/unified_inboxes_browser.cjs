@@ -30,7 +30,7 @@ const assert=require('node:assert/strict');
   assert.equal(await page.locator('#accounts button').count(),7);
   assert.equal(await page.locator('#aws-inbox-btn').count(),0);
   for(const name of ['one','two','three','four','five']) {
-   await page.locator('#accounts').getByRole('button',{name:name+'@extraliferecords.com',exact:true}).click();
+   await page.locator('#account-switch').click(); await page.locator('#accounts').getByRole('button',{name:name+'@extraliferecords.com',exact:true}).click();
    await page.getByText('Message for cloud:'+name,{exact:true}).click();
    if(name==='one') {
     const frame=page.frameLocator('#read-body iframe');
@@ -51,7 +51,7 @@ const assert=require('node:assert/strict');
   assert.equal((await page.evaluate(()=>calls))[0][0],'cloud:five');
   await page.locator('#search-box').fill('find');
   await page.getByText('Search cloud:five',{exact:true}).waitFor();
-  await page.locator('#accounts').getByRole('button',{name:'Extra Life Records',exact:true}).click();
+  await page.locator('#account-switch').click(); await page.locator('#accounts').getByRole('button',{name:'Extra Life Records',exact:true}).click();
   await page.getByText('Message for hello',{exact:true}).waitFor();
   assert.equal(await page.getByText('Body for cloud:five',{exact:true}).count(),0);
   // All seven identities have independent signature settings, including cloud mail.
@@ -77,7 +77,7 @@ const assert=require('node:assert/strict');
   assert((await page.locator('#set-signature').inputValue()).includes('Mailbox 6'));
   await page.locator('#settings-cancel').click();
   for(let index=0;index<7;index++) {
-   await page.locator('#accounts button').nth(index).click();
+   await page.locator('#account-switch').click(); await page.locator('#accounts button').nth(index).click();
    await page.waitForFunction(()=>state.messages.length>0);
    await page.locator('#compose-btn').click();
    await page.locator('#compose-backdrop.show').waitFor();
