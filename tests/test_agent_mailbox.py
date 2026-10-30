@@ -104,6 +104,26 @@ class AgentTests(unittest.TestCase):
         self.assertEqual(self.imap.literal, 'invoice OR ALL café'.encode())
         self.imap.uid.assert_called_once_with("search", "CHARSET", "UTF-8", "TEXT")
 
+    def test_charset_refusal_retries_plain_text_with_the_literal_resent(self):
+        sent = []
+        def uid(command, *args):
+            sent.append((args, self.imap.literal))
+            self.imap.literal = None  # imaplib consumes the literal with the command
+            if args[0] == "CHARSET":
+                return "NO", [b"[BADCHARSET (US-ASCII)] The specified charset is not supported."]
+            return "OK", [b""]
+        self.imap.uid.side_effect = uid
+        self.agent.search(query="cdclick", unseen=True)
+        self.agent.search(query="cdclick")
+        self.assertEqual(sent, [(("CHARSET", "UTF-8", "UNSEEN", "TEXT"), b"cdclick"),
+                                ((None, "UNSEEN", "TEXT"), b"cdclick"), ((None, "TEXT"), b"cdclick")])
+
+    def test_other_search_refusals_still_fail_without_a_retry(self):
+        self.imap.uid.return_value = ("NO", [b"Search is temporarily unavailable"])
+        with self.assertRaisesRegex(ValueError, "Mailbox search failed"):
+            self.agent.search(query="cdclick")
+        self.imap.uid.assert_called_once_with("search", "CHARSET", "UTF-8", "TEXT")
+
     def test_cross_folder_search_paginates_and_keeps_query_scope(self):
         self.agent.folders = Mock(return_value={"folders": ["INBOX", "Sent", "Archive", "Junk", "Trash"]})
         def search(folder, query, cursor, limit, header_id=None):
