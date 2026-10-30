@@ -356,7 +356,8 @@ blocked CSS/media/SVG channels, safe links, permission reset and stale-control
 protection. The browser test now runs in CI. Installed delivery remains pending.
 v1.9.22: pictures load by themselves from trusted senders and people the mailbox has
 written to (never in Junk, judged by the message's own folder); Always for this sender
-trusts the exact address. Cloud mailboxes always ask.
+trusts the exact address. v1.9.24: cloud mailboxes get their own trusted list
+(config cloud_trusted, pooled between PCs as Valet's simplemail:trusted).
 
 ### Credential protection (v1.5.2 source)
 

@@ -150,10 +150,8 @@ class TrustedImageTests(unittest.TestCase):
         result = self.check("OpenAI <noreply@email.openai.com>")
         self.assertEqual(result, {"auto": False, "address": "noreply@email.openai.com", "can_trust": True})
 
-    def test_junk_and_cloud_mailboxes_always_ask(self):
+    def test_junk_always_asks(self):
         self.assertFalse(self.check("support@distrokid.com", "junk")["auto"])
-        cloud = self.api.message_images_trusted("cloud:hello", "support@distrokid.com", "inbox")
-        self.assertEqual((cloud["auto"], cloud["can_trust"]), (False, False))
 
     def test_offline_sent_folder_just_asks(self):
         self.known.side_effect = OSError("offline")

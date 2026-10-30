@@ -1,4 +1,5 @@
 import inspect
+import json
 import hashlib
 import base64
 import tempfile
@@ -31,6 +32,22 @@ class UnifiedInboxTests(unittest.TestCase):
             for n in ['one','two','three','four','five']]}
         self.provider.discover()
         self.transport.reset_mock()
+
+    def test_cloud_mailbox_trusts_senders_for_pictures(self):
+        with patch.object(mailapp, 'known_senders') as known:
+            self.assertEqual(self.api.message_images_trusted('cloud:one', 'Sarah <Sarah@Sky.com>', 'inbox'),
+                             {'auto': False, 'address': 'sarah@sky.com', 'can_trust': True})
+            self.assertEqual(self.api.trust_sender_images('cloud:one', 'Sarah <sarah@sky.com>'), {'address': 'sarah@sky.com'})
+            self.assertEqual(self.cfg.data['cloud_trusted'], {'one@extraliferecords.com': ['sarah@sky.com']})
+            self.assertTrue(self.api.message_images_trusted('cloud:one', 'sarah@sky.com', 'inbox')['auto'])
+            self.assertFalse(self.api.message_images_trusted('cloud:two', 'sarah@sky.com', 'inbox')['auto'])   # per mailbox
+            self.assertFalse(self.api.message_images_trusted('cloud:one', 'sarah@sky.com', 'junk')['auto'])
+            self.assertTrue(self.api.message_images_trusted('cloud:one', 'one@extraliferecords.com', 'inbox')['auto'])
+            known.assert_not_called()   # a cloud mailbox's Sent folder is never read for this
+        saved = json.loads((Path(self.tmp.name) / 'config.json').read_text(encoding='utf-8'))
+        self.assertEqual(saved['cloud_trusted'], {'one@extraliferecords.com': ['sarah@sky.com']})
+        self.api.save_config(self.api.get_config())   # Settings > Save keeps it
+        self.assertEqual(self.cfg.data['cloud_trusted'], {'one@extraliferecords.com': ['sarah@sky.com']})
 
     def test_all_accounts_share_config_without_persisting_cloud_as_imap(self):
         cfg = self.api.get_config()
