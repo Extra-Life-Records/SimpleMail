@@ -148,7 +148,20 @@ function startMailRefresh() {
 
 /* ---------------- helpers ---------------- */
 
+// A build swapped in underneath the open app can't load more of its own code;
+// Python then reports a zlib error that means nothing to anyone.
+const REPLACED_ERROR = /while decompressing data|incorrect header check/;
+
+function friendlyError(error) {
+  return REPLACED_ERROR.test(String(error))
+    ? "SimpleMail was updated while it was open. Restart it to carry on (open drafts are kept)." : String(error);
+}
+
 function toast(msg, isError = false) {
+  if (isError) {
+    msg = friendlyError(msg);
+    checkAppReplaced();
+  }
   const t = $("toast");
   t.textContent = msg;
   t.className = "toast" + (isError ? " error" : "");
@@ -1128,6 +1141,7 @@ async function init() {
     document.body.innerHTML = '<div style="padding:40px">App backend not connected.</div>';
     return;
   }
+  await restoreRestartDrafts();
   $("compose-btn").addEventListener("click", () => openCompose());
   $("send-btn").addEventListener("click", sendCompose);
   $("draft-btn").addEventListener("click", saveDraft);
@@ -1186,6 +1200,9 @@ async function init() {
   $("upd-now").addEventListener("click", doUpdate);
   $("upd-later").addEventListener("click", () => $("update-backdrop").classList.remove("show"));
   $("upd-check").addEventListener("click", () => checkForUpdates(false));
+  $("restart-now").addEventListener("click", restartApp);
+  window.addEventListener("focus", checkAppReplaced);
+  setInterval(checkAppReplaced, 60000);
   setupDivider();
   document.addEventListener("click", closeCtxMenu);
   document.addEventListener("contextmenu", closeCtxMenu);
@@ -1425,6 +1442,48 @@ function closeCtxMenu() {
 }
 
 /* ---------------- auto-update ---------------- */
+
+async function checkAppReplaced() {
+  if (!api || typeof api.app_replaced !== "function") return false;
+  try {
+    const { replaced } = await api.app_replaced();
+    $("restart-status").hidden = !replaced;
+    return replaced;
+  } catch { return false; }
+}
+
+// The window's storage is private and ends with the process, so the drafts
+// recovery holds are handed to the app to give back after the restart.
+function unsavedDrafts() {
+  const drafts = [];
+  try {
+    if (typeof composeSession !== "undefined" && composeSession) backupCompose(composeSession);
+    for (let n = 0; n < localStorage.length; n++) {
+      const key = localStorage.key(n);
+      if (key.startsWith("simplemail-compose:")) drafts.push(JSON.parse(localStorage.getItem(key)));
+    }
+  } catch {}
+  return drafts;
+}
+
+async function restartApp() {
+  $("restart-now").disabled = true;
+  try { await api.restart_app(unsavedDrafts()); }
+  catch (e) { toast("Restart failed: " + e, true); $("restart-now").disabled = false; }
+}
+
+async function restoreRestartDrafts() {
+  if (typeof api.take_restart_drafts !== "function") return;
+  let kept = 0;
+  try {
+    for (const draft of await api.take_restart_drafts()) {
+      if (!draft.account_id || !draft.id || !draft.payload) continue;
+      localStorage.setItem("simplemail-compose:" + draft.account_id + ":" + draft.id, JSON.stringify(draft));
+      kept += 1;
+    }
+  } catch {}
+  if (kept) toast(kept === 1 ? "Your open draft was kept. Find it in Drafts." : `${kept} open drafts were kept. Find them in Drafts.`);
+}
 
 async function checkForUpdates(silent = false) {
   try {

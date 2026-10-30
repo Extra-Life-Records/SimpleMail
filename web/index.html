@@ -123,6 +123,9 @@
   #cloud-status { padding: 10px; margin-bottom: 8px; font-size: 0.8rem; background: #fff4df; border-radius: 8px; }
   #cloud-status[hidden] { display: none; }
   #cloud-status button { margin: 8px 0 0; padding: 4px 8px; font-size: 0.8rem; }
+  #restart-status { padding: 10px; margin-bottom: 8px; font-size: 0.8rem; background: #e8f0fe; border-radius: 8px; }
+  #restart-status[hidden] { display: none; }
+  #restart-status button { margin: 8px 0 0; padding: 4px 8px; font-size: 0.8rem; }
 
   /* ---- Compose From strip (identity is locked; display only) ---- */
   .from-strip {
@@ -530,6 +533,10 @@
     <div id="cloud-status" role="status" hidden>
       <span id="cloud-status-message"></span>
       <button type="button" id="cloud-settings" class="outline">Connection settings</button>
+    </div>
+    <div id="restart-status" role="status" hidden>
+      <span>SimpleMail has been updated. Restart to finish (open drafts are kept).</span>
+      <button type="button" id="restart-now">Restart now</button>
     </div>
     <div id="sidebar-scroll">
       <nav aria-label="Main navigation">
