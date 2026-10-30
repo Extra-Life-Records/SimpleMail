@@ -96,7 +96,8 @@ async function persistCompose() {
   });
   try { return await session.queue; }
   catch (error) {
-    if (composeSession === session) $("compose-save-status").textContent = "Not saved: " + error;
+    if (composeSession === session) $("compose-save-status").textContent = "Not saved: " +
+      (typeof friendlyError === "function" ? friendlyError(error) : error);
     throw error;
   }
 }

@@ -72,7 +72,7 @@ else:
     _WEBVIEW_IMPORT_ERROR = None
 
 APP_NAME = "SimpleMail"
-APP_VERSION = "1.9.26"
+APP_VERSION = "1.9.27"
 APP_REPO = "Extra-Life-Records/SimpleMail"  # owner/repo for auto-updates
 CONFIG_DIR = Path(os.environ.get("APPDATA", str(Path.home()))) / APP_NAME
 CONFIG_FILE = CONFIG_DIR / "config.json"
@@ -1035,6 +1035,70 @@ def _frozen_exe_path():
     if getattr(sys, "frozen", False):
         return Path(sys.executable)
     return None
+
+
+def _exe_stamp(path):
+    """Size + modified time of an exe, or None when it can't be read."""
+    try:
+        st = Path(path).stat()
+        return (st.st_size, st.st_mtime_ns)
+    except OSError:
+        return None
+
+
+# Taken at start: if the exe on disk changes later (Toolbelt or another
+# installer swapped in a new build while this one is open), every module this
+# process hasn't imported yet would be read out of the NEW file at the OLD
+# offsets and fail with "Error -3 while decompressing data". So the app
+# notices, and offers a restart instead.
+_START_EXE = _frozen_exe_path()
+_START_STAMP = _exe_stamp(_START_EXE) if _START_EXE else None
+
+
+def exe_replaced(path=_START_EXE, started=_START_STAMP):
+    """True when the packaged exe on disk is no longer the one that started."""
+    if path is None or started is None:
+        return False
+    return _exe_stamp(path) != started
+
+
+def restart_drafts_file():
+    return CONFIG_DIR / "restart-drafts.json"
+
+
+def restart_app(path=_START_EXE, pid=None, popen=None, exit_=None, drafts=None, drafts_file=None):
+    """Relaunch the exe on disk once this process has gone, then exit.
+
+    Everything here must already be imported: a replaced exe can't load more
+    code (so no compose store: open drafts go to a plain file the next start
+    hands back to the window, whose own storage doesn't outlive the process).
+    A hidden PowerShell waits for this process to end, then starts the app,
+    retrying while WebView2 still holds its profile (see finish_update).
+    PYINSTALLER_RESET_ENVIRONMENT makes it unpack its own files instead of
+    reusing this process's folder, which is deleted as it exits.
+    """
+    if path is None:
+        raise RuntimeError("Restart only works in the packaged app")
+    if drafts:
+        if not isinstance(drafts, list) or len(drafts) > 50 or not all(isinstance(d, dict) for d in drafts):
+            raise ValueError("Invalid drafts")
+        target = Path(drafts_file or restart_drafts_file())
+        target.parent.mkdir(parents=True, exist_ok=True)
+        staged = target.with_name(target.name + ".tmp")
+        staged.write_text(json.dumps(drafts, ensure_ascii=False), encoding="utf-8")
+        os.replace(staged, target)
+    pid = pid or os.getpid()
+    quoted = "'" + str(path).replace("'", "''") + "'"
+    script = (f"Wait-Process -Id {int(pid)} -ErrorAction SilentlyContinue; "
+              f"foreach ($n in 1..3) {{ Start-Sleep -Seconds 3; $p = Start-Process -FilePath {quoted} -PassThru; "
+              f"Start-Sleep -Seconds 6; if (-not $p.HasExited) {{ break }} }}")
+    flags = (getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
+             | getattr(subprocess, "CREATE_NO_WINDOW", 0))
+    (popen or subprocess.Popen)(
+        ["powershell", "-NoProfile", "-NonInteractive", "-WindowStyle", "Hidden", "-Command", script],
+        close_fds=True, creationflags=flags, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+        env={**os.environ, "PYINSTALLER_RESET_ENVIRONMENT": "1"})
+    (exit_ or os._exit)(0)
 
 
 def _staged_exe_path(target):
@@ -2152,6 +2216,27 @@ class Api:
         apply_update(info["asset_url"])
         return {"ok": True}
 
+    def app_replaced(self):
+        """Has a newer build been put in place while this one is open?"""
+        return {"replaced": exe_replaced()}
+
+    def restart_app(self, drafts=None):
+        """Start the app again from the exe on disk (process exits), keeping open drafts."""
+        restart_app(drafts=drafts)
+
+    def take_restart_drafts(self):
+        """Drafts the previous run handed over as it restarted (once)."""
+        path = restart_drafts_file()
+        try:
+            drafts = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return []
+        try:
+            path.unlink()
+        except OSError:
+            pass
+        return [d for d in drafts if isinstance(d, dict)] if isinstance(drafts, list) else []
+
 
 # ---------------------------------------------------------------------------
 # Native Windows notifications (toasts, like Outlook)
@@ -2415,8 +2500,9 @@ def main():
 
     # Mailboxes added on the owner's other PCs come in first, so they get a poller too (a few seconds at most).
     syncer = AccountSyncer(cfg)
-    syncer.start()
-    syncer.first.wait(8)
+    if not os.environ.get("SIMPLEMAIL_NO_SYNC"):   # set for a sandboxed test copy: its mailboxes stay its own
+        syncer.start()
+        syncer.first.wait(8)
 
     api = Api(cfg)
     api.syncer = syncer
