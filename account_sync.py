@@ -8,7 +8,7 @@ mailbox is removed everywhere, and nothing bounces back (what was taken in is re
 
 Valet only answers SimpleMail itself, and only while it's unlocked; when it can't (locked, not installed), nothing
 changes and the next round tries again. Fasthosts mailboxes aren't shared: they moved to the cloud mailboxes, which
-every PC already gets from the cloud.
+every PC gets from the cloud, and the sign-in to those travels here too (CloudSignIn), so a new PC needs only Valet.
 
 A mailbox's sign-in (its password, or the Microsoft refresh token in "password") travels with it so the other PC
 can read it straight away, but changing only a sign-in isn't a change: Microsoft hands each PC a new token as it's
@@ -26,7 +26,8 @@ from pathlib import Path
 IDENTITY = "simplemail:accounts"   # Valet keeps it beside Surf's sign-ins; only SimpleMail may ask for it
 FASTHOSTS = ("livemail.co.uk", "fasthosts.co.uk")
 STALE_DAYS = 30                    # a PC that hasn't shared anything for a month (retired) no longer counts
-SECRETS = ("password", "smtp_password")
+SECRETS = ("password", "smtp_password", "refresh_token")
+CLOUD = "~cloud"                   # the cloud mailboxes' sign-in travels as one more entry under this key
 
 
 def pc_name():
@@ -119,18 +120,56 @@ class ValetStore:
         self.ask({"op": "signins_put", "identity": IDENTITY, "pc": pc, "jar": json.dumps(jar)})
 
 
+# ---- the cloud mailboxes' sign-in (aws-mail.json, written by cloud_mail.CloudMail) ---------------------
+class CloudSignIn:
+    """So a new PC sees the cloud mailboxes too without signing in to them: the sign-in travels like a mailbox.
+    A PC that already has its own keeps it; signing out on one PC doesn't sign the others out."""
+
+    def __init__(self, directory, protector=None):
+        self.path = Path(directory) / "aws-mail.json"
+        self.protector = protector
+
+    def _protect(self, value, decrypt=False):
+        if self.protector:
+            return self.protector(value, decrypt)
+        from model_control import protect_secret
+        return protect_secret(value, decrypt)
+
+    def read(self):
+        """{api_url, auth_url, client_id, refresh_token} when this PC is signed in, else None."""
+        try:
+            cfg = json.loads(self.path.read_text(encoding="utf-8"))
+            token = self._protect(cfg["refresh_token"]["windows_dpapi"], True)
+        except (OSError, ValueError, KeyError, TypeError):
+            return None
+        return {k: cfg.get(k, "") for k in ("api_url", "auth_url", "client_id")} | {"refresh_token": token}
+
+    def write(self, value):
+        from cloud_mail import CloudMail
+        CloudMail.validate(value)   # only the real service's addresses, whatever arrives
+        cfg = {k: value[k] for k in ("api_url", "auth_url", "client_id")}
+        cfg["refresh_token"] = {"windows_dpapi": self._protect(value["refresh_token"])}
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = self.path.with_suffix(".tmp")
+        tmp.write_text(json.dumps(cfg), encoding="utf-8")
+        os.replace(tmp, self.path)
+
+
 # ---- one round ---------------------------------------------------------------------------------------
 _round = threading.Lock()
 
 
-def sync(cfg, store, record, normalize, pc=None, now=None):
-    """Share this PC's mailboxes and take in newer ones from the other PCs. Returns the addresses taken in or
-    removed here (empty when nothing changed on this PC)."""
+def sync(cfg, store, record, normalize, pc=None, now=None, cloud=None):
+    """Share this PC's mailboxes (and its cloud sign-in, given `cloud`) and take in newer ones from the other
+    PCs. Returns the addresses taken in or removed here (empty when nothing changed on this PC)."""
     pc = pc or pc_name()
     now = now if now is not None else time.time()
     with _round:
         mine = record.load()
         local = {key(a): a for a in cfg.accounts() if shared(a)}
+        signed_in = cloud.read() if cloud else None
+        if signed_in:
+            local[CLOUD] = signed_in
         changed = False
         for k in set(local) | set(mine):
             ours = mine.get(k) or {}
@@ -152,6 +191,17 @@ def sync(cfg, store, record, normalize, pc=None, now=None):
                 ours = mine.get(k)
                 if ours and (theirs["changed"] <= ours["changed"] or
                              (theirs["hash"] == ours["hash"] and bool(theirs.get("deleted")) == bool(ours.get("deleted")))):
+                    continue
+                if k == CLOUD:
+                    # Taken only by a PC not signed in to the same service; a sign-out isn't copied.
+                    if not cloud or theirs.get("deleted") or not theirs.get("account"):
+                        continue
+                    if not signed_in or signed_in.get("api_url") != theirs["account"].get("api_url"):
+                        cloud.write(theirs["account"])
+                        signed_in = local[CLOUD] = theirs["account"]
+                    mine[k] = {"changed": theirs["changed"], "hash": theirs["hash"], "deleted": False}
+                    brought.append(k)
+                    changed = True
                     continue
                 current = next((a for a in accounts if key(a) == k), None)
                 if theirs.get("deleted"):
@@ -181,6 +231,8 @@ def sync(cfg, store, record, normalize, pc=None, now=None):
             cfg.save()
         if changed:
             by_key = {key(a): a for a in accounts if shared(a)}
+            if signed_in:
+                by_key[CLOUD] = signed_in
             store.put(pc, {"pc": pc, "saved": now, "accounts": {
                 k: {**r, "account": None if r.get("deleted") or k not in by_key else
                     {f: v for f, v in by_key[k].items() if not f.startswith("_")}}

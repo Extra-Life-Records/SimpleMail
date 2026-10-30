@@ -148,5 +148,63 @@ class RetireFasthostsTests(unittest.TestCase):
         self.assertEqual(api._retire_fasthosts(cloud), set())
 
 
+
+class FakeCloud:
+    """aws-mail.json for one PC, without Windows encryption."""
+    def __init__(self, signed_in=None):
+        self.value, self.writes = signed_in, 0
+
+    def read(self):
+        return dict(self.value) if self.value else None
+
+    def write(self, value):
+        self.value, self.writes = dict(value), self.writes + 1
+
+
+SIGNED_IN = {"api_url": "https://abc123.execute-api.eu-west-1.amazonaws.com",
+             "auth_url": "https://mail-1.auth.eu-west-1.amazoncognito.com", "client_id": "client12345",
+             "refresh_token": "laptop-cloud-token"}
+
+
+class CloudSignInTests(unittest.TestCase):
+    def sync(self, pc, now, cloud):
+        return account_sync.sync(pc.cfg, pc.cloud.store(), pc.record, normalize_account, pc=pc.name, now=now,
+                                 cloud=cloud)
+
+    def test_a_fresh_pc_gets_the_cloud_mailboxes_sign_in(self):
+        cloud = Cloud()
+        laptop, fresh = PC(cloud, "NIMBUS", []), PC(cloud, "NEWPC", [])
+        laptop_cloud, fresh_cloud = FakeCloud(SIGNED_IN), FakeCloud()
+        self.sync(laptop, 100, laptop_cloud)
+        self.assertEqual(self.sync(fresh, 200, fresh_cloud), [account_sync.CLOUD])
+        self.assertEqual(fresh_cloud.value, SIGNED_IN)
+        self.assertEqual(self.sync(fresh, 300, fresh_cloud), [])     # settled
+        self.assertEqual(self.sync(laptop, 400, laptop_cloud), [])   # nothing back
+        self.assertNotIn("laptop-cloud-token", laptop.record.path.read_text())
+
+    def test_a_pc_keeps_its_own_cloud_sign_in_and_a_sign_out_isnt_copied(self):
+        cloud = Cloud()
+        laptop, desktop = PC(cloud, "NIMBUS", []), PC(cloud, "DESKTOP", [])
+        laptop_cloud, desktop_cloud = FakeCloud(SIGNED_IN), FakeCloud({**SIGNED_IN, "refresh_token": "desktop"})
+        self.sync(desktop, 100, desktop_cloud)
+        self.sync(laptop, 200, laptop_cloud)
+        self.sync(desktop, 300, desktop_cloud)
+        self.assertEqual((desktop_cloud.value["refresh_token"], desktop_cloud.writes), ("desktop", 0))
+        laptop_cloud.value = None   # signed out on the laptop
+        self.sync(laptop, 400, laptop_cloud)
+        self.sync(desktop, 500, desktop_cloud)
+        self.assertEqual(desktop_cloud.value["refresh_token"], "desktop")
+
+    def test_the_real_file_round_trips_and_refuses_strange_addresses(self):
+        d = Path(tempfile.mkdtemp())
+        store = account_sync.CloudSignIn(d, protector=lambda v, decrypt=False: v[::-1])
+        self.assertIsNone(store.read())
+        store.write(SIGNED_IN)
+        self.assertNotIn("laptop-cloud-token", (d / "aws-mail.json").read_text())
+        self.assertEqual(store.read(), SIGNED_IN)
+        with self.assertRaises(ValueError):
+            store.write({**SIGNED_IN, "api_url": "https://evil.example.com"})
+
+
 if __name__ == "__main__":
     unittest.main()
