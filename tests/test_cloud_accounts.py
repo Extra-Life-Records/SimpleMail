@@ -43,6 +43,8 @@ class UnifiedInboxTests(unittest.TestCase):
             self.assertFalse(self.api.message_images_trusted('cloud:two', 'sarah@sky.com', 'inbox')['auto'])   # per mailbox
             self.assertFalse(self.api.message_images_trusted('cloud:one', 'sarah@sky.com', 'junk')['auto'])
             self.assertTrue(self.api.message_images_trusted('cloud:one', 'one@extraliferecords.com', 'inbox')['auto'])
+            self.assertTrue(self.api.message_images_trusted('cloud:one', 'two@extraliferecords.com', 'inbox')['auto'])
+            self.assertTrue(self.api.message_images_trusted('cloud:one', 'hello@example.com', 'inbox')['auto'])   # an IMAP one
             known.assert_not_called()   # a cloud mailbox's Sent folder is never read for this
         saved = json.loads((Path(self.tmp.name) / 'config.json').read_text(encoding='utf-8'))
         self.assertEqual(saved['cloud_trusted'], {'one@extraliferecords.com': ['sarah@sky.com']})

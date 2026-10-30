@@ -1939,14 +1939,15 @@ class Api:
         business domains (a personal domain like live.co.uk is too broad)."""
         import mail_screen
         trusted = list(self._cloud_trusted(acct) if self._is_cloud(acct) else acct.get("trusted", []))
-        for other in self.cfg.accounts():
+        own = list(self.cfg.accounts())
+        if self._is_cloud(acct):   # the other cloud mailboxes are the owner's too (the IMAP side keeps none of them)
+            own += list(self._cloud_accounts().accounts.values())
+        for other in own:
             for addr in (other.get("email", ""), other.get("from_email", "")):
                 addr = addr.strip().lower()
                 if "@" in addr:
                     host = mail_screen.domain(addr)
                     trusted.append(addr if host in mail_screen.PERSONAL_DOMAINS else host)
-        if self._is_cloud(acct) and "@" in acct.get("email", ""):
-            trusted.append(acct["email"].strip().lower())   # the cloud mailbox's own address
         return trusted
 
     @staticmethod
